@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 
 from ai_review.vscode_launcher import collect_preview
+from ai_review import vscode_launcher
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -67,3 +68,29 @@ def test_launch_config_sets_utf8_env() -> None:
         assert item["console"] == "integratedTerminal"
         assert item["env"]["PYTHONUTF8"] == "1"
         assert item["env"]["PYTHONIOENCODING"] == "utf-8"
+
+
+def test_select_repository_keyboard_interrupt_is_cancel(monkeypatch, capsys) -> None:
+    class FakeRoot:
+        destroyed = False
+
+        def withdraw(self) -> None:
+            pass
+
+        def attributes(self, *_args) -> None:
+            pass
+
+        def destroy(self) -> None:
+            self.destroyed = True
+
+    root = FakeRoot()
+    monkeypatch.setattr(vscode_launcher.tk, "Tk", lambda: root)
+
+    def raise_interrupt(**_kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(vscode_launcher.filedialog, "askdirectory", raise_interrupt)
+
+    assert vscode_launcher._select_repository() is None
+    assert root.destroyed is True
+    assert "キャンセル" in capsys.readouterr().out

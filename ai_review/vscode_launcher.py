@@ -91,12 +91,12 @@ def run(argv: list[str] | None = None) -> int:
 
 
 def _select_repository() -> str | None:
+    root: tk.Tk | None = None
     try:
         root = tk.Tk()
         root.withdraw()
         root.attributes("-topmost", True)
         selected = filedialog.askdirectory(parent=root, title="レビュー対象のGitリポジトリを選択")
-        root.destroy()
     except tk.TclError:
         print(
             "フォルダ選択UIを開けません。headless環境では "
@@ -104,6 +104,12 @@ def _select_repository() -> str | None:
             file=sys.stderr,
         )
         return None
+    except KeyboardInterrupt:
+        print("対象リポジトリ選択がキャンセルされました。")
+        return None
+    finally:
+        if root is not None:
+            root.destroy()
     return selected or None
 
 
