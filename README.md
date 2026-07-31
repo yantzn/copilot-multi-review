@@ -2,11 +2,11 @@
 
 GitHub Copilot CLI専用のローカル・マルチエージェントコードレビュー基盤です。
 
-このリポジトリにレビューエンジン、共通設定、プロンプト、Schema、レポート、runtimeを集約し、レビュー対象の外部Gitリポジトリにはレビュー用ファイルを作成しません。
+レビューエンジン、プロンプト、Schema、runtime、レポートはこの専用リポジトリへ集約します。レビュー対象の外部Gitリポジトリには、レビュー用コード、設定、レポート、runtimeを作成しません。
 
-## 初期セットアップ
+## 初回セットアップ
 
-Python 3.11以上を使用してください。
+Python 3.11以上を使用してください。VS CodeでPython 3.10が選ばれる場合は、コマンドパレットの`Python: Select Interpreter`から3.11以上の仮想環境を選びます。
 
 ```bash
 python -m venv .venv
@@ -15,21 +15,29 @@ python -m pip install -U pip
 python -m pip install -e .[dev]
 ```
 
-macOS/Linuxでは次のように仮想環境を有効化します。
+macOS/Linux:
 
 ```bash
+python -m venv .venv
 source .venv/bin/activate
 python -m pip install -U pip
 python -m pip install -e .[dev]
 ```
 
-GitHub Copilot CLIを導入し、次のコマンドが成功する状態にしてください。
+GitHub Copilot CLIを導入し、認証してください。
 
 ```bash
 copilot version
+copilot login
+ai-review validate-config
 ```
 
-認証が必要な場合は、Copilot CLIの案内に従ってログインしてください。
+WindowsではUTF-8環境を推奨します。
+
+```powershell
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
+```
 
 ## CLI
 
@@ -37,28 +45,60 @@ copilot version
 ai-review --help
 ai-review validate-config
 ai-review review --repo <path> --target base
-ai-review review --repo <path> --target base --base-branch main
+ai-review review --repo <path> --target uncommitted --agent security
+ai-review review --repo <path> --target staged
+ai-review review --repo <path> --target commits --commits <from>..<to>
+ai-review review --repo <path> --target file --file <repo-relative-path>
+ai-review rerun --repo <path>
 ai-review show-latest --repo <path>
 ai-review cancel --repo <path>
+ai-review cleanup-locks --repo <path>
+ai-review cleanup-locks --repo <path> --apply
 ```
 
-`python -m ai_review --help`でも起動できます。
+`python -m ai_review --help`でも起動できます。差分収集だけを確認する場合は`--no-agents`を指定します。
 
-`review --repo <path>`は外部のローカルGitリポジトリを検証し、worktree、remote、現在ブランチ、HEAD SHA、基準ブランチ、project IDを表示します。
-あわせて`base`、`uncommitted`、`staged`、`commits`、`file`の差分規模、変更ファイル、README等の要件候補、品質チェック結果をCopilot実行前に収集します。
+## VS Code
 
-基準ブランチは次の順で判定します。
+推奨拡張は`.vscode/extensions.json`に定義しています。
 
-1. `--base-branch`
-2. `origin/HEAD`
-3. `main`
-4. `develop`
+- Python
+- Debugpy
 
-判定できない場合は、自動fetchせずにエラーになります。
+操作:
 
-品質チェックは共通allowlistに含まれるコマンドのみ実行できます。パイプ、リダイレクト、コマンド置換、PowerShell式評価、`git fetch`、`git checkout`、`git reset`は拒否します。
+1. このリポジトリをVS Codeで開く
+2. `Ctrl+Shift+D`
+3. 実行構成を選択
+4. ▶を押す
+5. フォルダ選択で対象Gitリポジトリを選ぶ
+6. 実行確認ダイアログを確認
+7. 実行する
 
-エージェント実行では、1つのGitHub Copilot CLIを9種類の論理エージェントとして次の順に直列実行します。
+通常のPythonファイル右上の再生ボタンではなく、実行とデバッグ画面の構成を使います。
+
+構成:
+
+- Copilotレビュー：全エージェント
+- Copilotレビュー：未コミット差分
+- Copilotレビュー：ステージ済み差分
+- Copilotレビュー：Security
+- Copilotレビュー：前回条件で再実行
+- Copilotレビュー：前回結果を表示
+- Copilotレビュー：実行停止
+- Copilotレビュー：設定検証
+
+確認ダイアログには対象リポジトリ、project ID、現在ブランチ、基準ブランチ、レビュー種別、実行エージェント、変更ファイル数、差分行数、切り捨て予定、未コミット差分、ステージ済み差分、品質チェック検出結果を表示します。
+
+headless環境ではCLIを使います。
+
+```bash
+python -m ai_review review --repo <path> --target base
+```
+
+## エージェント
+
+1つのGitHub Copilot CLIを、次の9種類の論理エージェントとして完全に直列実行します。最大同時Copilot呼び出し数は1です。
 
 1. requirements
 2. correctness
@@ -70,66 +110,60 @@ ai-review cancel --repo <path>
 8. devil_advocate
 9. final
 
-単独エージェントは`--agent security`のように指定できます。差分収集だけを確認したい場合は`--no-agents`を指定してください。
+## 安全制約
 
-Copilot送信前には差分内のシークレット候補を検査します。confirmed候補が1件でもある場合、Copilot CLIを呼ばずに`BLOCKED`として扱います。検出器定義や専用テストfixtureの自己誤検知は、ファイル位置と文脈を確認して非ブロッキングに分類します。
+- Gemini API、OpenAI API、ローカルLLMは使用しません
+- `shell=True`は使用しません
+- 任意シェル、パイプ、リダイレクト、コマンド置換、PowerShell式評価を拒否します
+- 自動修正、commit、push、mergeは行いません
+- 自動fetch、checkout、resetは行いません
+- 対象リポジトリへレビュー関連ファイルを書きません
+- confirmedシークレットがある場合、Copilot CLIを呼ばず`BLOCKED`にします
 
-Windowsでは`copilot.exe`、`copilot.cmd`、`copilot.bat`、`copilot`の順でGitHub Copilot CLIを解決します。`.cmd`または`.bat`の場合だけ、`COMSPEC /d /c call <resolved-path> ...`の固定引数配列で起動します。外部コマンド出力はbytesで受け取り、UTF-8、cp932、UTF-8 replacementの順でdecodeします。
+Windowsでは`copilot.exe`、`copilot.cmd`、`copilot.bat`、`copilot`の順で解決します。`.cmd`または`.bat`だけ`COMSPEC /d /c call <resolved-path> ...`の固定引数配列で起動します。外部コマンド出力はbytesで受け取り、UTF-8、cp932、UTF-8 replacementの順でdecodeします。
 
-レビュー結果はこの専用リポジトリの`reports/<project-id>/latest`と`reports/<project-id>/history/<run-id>`へ保存します。実行状態とキャンセル要求は`runtime/<project-id>`へ保存し、対象リポジトリには作成しません。
-
-```bash
-ai-review show-latest --repo <path>
-ai-review rerun --repo <path>
-ai-review cancel --repo <path>
-ai-review cleanup-locks --repo <path>
-ai-review cleanup-locks --repo <path> --apply
-```
-
-現時点では`show-latest`、`cancel`は入口だけを定義しており、後続Issueで実装します。未実装コマンドは明確なエラーを返します。
-
-## ディレクトリ
+## 保存場所
 
 ```text
-ai_review/  CLIと実行基盤
-agents/     論理エージェント別プロンプト
-schemas/    JSON Schema
-config/     共通設定
-reports/    レビュー結果。Git管理対象外
-runtime/    実行状態とロック。Git管理対象外
+reports/
+└── <project-id>/
+    ├── latest/
+    │   ├── run.json
+    │   ├── final.json
+    │   ├── report.md
+    │   └── agents/
+    └── history/
+        └── <run-id>/
+
+runtime/
+└── <project-id>/
+    ├── review.lock
+    ├── mutation.lock
+    ├── cleanup.lock
+    ├── running.json
+    └── cancel.json
 ```
 
-## VS Code
+`reports/`と`runtime/`はGit管理対象外です。
 
-推奨拡張は`.vscode/extensions.json`に定義しています。
+## 結果判定
 
-- Python
-- Debugpy
-
-後続Issueで、VS Codeの実行とデバッグ画面から対象リポジトリ選択と実行確認を行う構成を追加します。
-
-実行とデバッグ画面から次の構成を選択できます。
-
-- Copilotレビュー：全エージェント
-- Copilotレビュー：未コミット差分
-- Copilotレビュー：ステージ済み差分
-- Copilotレビュー：Security
-- Copilotレビュー：前回条件で再実行
-- Copilotレビュー：前回結果を表示
-- Copilotレビュー：実行停止
-- Copilotレビュー：設定検証
-
-▶を押すとOS標準のフォルダ選択ダイアログが開き、対象Gitリポジトリの情報と差分規模を確認してから実行できます。headless環境でダイアログを開けない場合は、CLIで次のように実行してください。
-
-```bash
-python -m ai_review review --repo <path> --target base
-```
+- `APPROVE`: 指摘なし
+- `APPROVE_WITH_NOTES`: MinorまたはInfoのみ
+- `CHANGES_REQUIRED`: Majorあり
+- `BLOCKED`: Criticalまたはブロッキングシークレットあり
+- `INCONCLUSIVE`: 情報不足、切り捨て、失敗、キャンセル、品質チェック失敗など
 
 ## 検証
 
 ```bash
 python -m pytest tests
-python -m py_compile ai_review/*.py
+python -m compileall -q ai_review
 python -m ai_review --help
 python -m ai_review validate-config
+python -m json.tool .vscode/launch.json
+python -m json.tool .vscode/settings.json
+python -m json.tool .vscode/extensions.json
 ```
+
+詳しい設計は`docs/architecture.md`、運用手順は`docs/operations.md`、復旧方法は`docs/troubleshooting.md`を参照してください。
