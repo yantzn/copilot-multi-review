@@ -76,7 +76,14 @@ def classify_secret_candidate(file: str | None, line: str, category: str) -> str
     normalized = (file or "").replace("\\", "/")
     lowered = line.lower()
     if normalized in {"ai_review/secrets.py"} or normalized.startswith("tests/"):
-        if "re.compile" in line or "pattern" in lowered or "fixture" in lowered or "dummy" in lowered:
+        if (
+            "re.compile" in line
+            or "pattern" in lowered
+            or "fixture" in lowered
+            or "dummy" in lowered
+            or "write_text" in line
+            or "diff_text" in line
+        ):
             return "detector_definition" if normalized == "ai_review/secrets.py" else "test_fixture"
     if category == "pem_certificate" and "BEGIN CERTIFICATE" in line and "END CERTIFICATE" not in line:
         if normalized == "ai_review/secrets.py" or normalized.startswith("tests/"):

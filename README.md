@@ -74,6 +74,8 @@ ai-review cancel --repo <path>
 
 Copilot送信前には差分内のシークレット候補を検査します。confirmed候補が1件でもある場合、Copilot CLIを呼ばずに`BLOCKED`として扱います。検出器定義や専用テストfixtureの自己誤検知は、ファイル位置と文脈を確認して非ブロッキングに分類します。
 
+Windowsでは`copilot.exe`、`copilot.cmd`、`copilot.bat`、`copilot`の順でGitHub Copilot CLIを解決します。`.cmd`または`.bat`の場合だけ、`COMSPEC /d /c call <resolved-path> ...`の固定引数配列で起動します。外部コマンド出力はbytesで受け取り、UTF-8、cp932、UTF-8 replacementの順でdecodeします。
+
 現時点では`show-latest`、`cancel`は入口だけを定義しており、後続Issueで実装します。未実装コマンドは明確なエラーを返します。
 
 ## ディレクトリ

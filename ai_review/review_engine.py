@@ -8,7 +8,7 @@ import time
 import uuid
 
 from .agents import AGENT_ORDER, AgentResult, Finding, rule_based_decision, stricter_decision
-from .copilot import find_copilot_executable
+from .copilot import classify_copilot_error, resolve_copilot_command
 from .diff_collector import DiffSummary
 from .processes import decode_output
 from .quality import QualityCheckResult
@@ -58,9 +58,9 @@ class CopilotClient:
     provider = "github-copilot-cli"
 
     def run_prompt(self, prompt: str, *, timeout_seconds: int) -> str:
-        executable = find_copilot_executable()
+        command = resolve_copilot_command([])
         completed = subprocess.run(
-            [executable],
+            command.command,
             input=prompt.encode("utf-8"),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -70,12 +70,12 @@ class CopilotClient:
         )
         if completed.returncode != 0:
             stderr = decode_output(completed.stderr)
-            lowered = stderr.lower()
-            if "rate limit" in lowered:
+            category = classify_copilot_error(stderr)
+            if category == "rate_limit":
                 raise ReviewEngineError("Copilot CLI rate limit")
-            if "auth" in lowered or "login" in lowered:
+            if category == "auth":
                 raise ReviewEngineError("Copilot CLI authentication failed")
-            raise ReviewEngineError("Copilot CLI failed")
+            raise ReviewEngineError(f"Copilot CLI failed: {category}")
         return decode_output(completed.stdout)
 
 
