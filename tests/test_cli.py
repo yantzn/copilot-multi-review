@@ -17,11 +17,12 @@ def test_help_succeeds(capsys: pytest.CaptureFixture[str]) -> None:
     assert "review" in captured.out
 
 
-def test_review_is_explicitly_not_implemented(capsys: pytest.CaptureFixture[str]) -> None:
-    result = cli.main(["review", "--repo", ".", "--target", "base"])
+def test_storage_subcommands_are_registered(capsys: pytest.CaptureFixture[str]) -> None:
+    result = cli.main(["--help"])
     captured = capsys.readouterr()
-    assert result == 4
-    assert "後続Issueで実装" in captured.err
+    assert result == 0
+    assert "rerun" in captured.out
+    assert "cleanup-locks" in captured.out
 
 
 def test_validate_config_reports_missing_copilot(
