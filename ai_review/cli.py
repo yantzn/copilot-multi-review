@@ -10,6 +10,7 @@ from .copilot import (
     ensure_supported_python,
     get_copilot_version,
 )
+from .repository import RepositoryError, resolve_repository
 
 
 class CommandNotImplementedError(RuntimeError):
@@ -30,13 +31,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     review = subparsers.add_parser("review", help="指定したローカルGitリポジトリをレビューします")
     review.add_argument("--repo", required=True, help="レビュー対象のローカルGitリポジトリパス")
+    review.add_argument("--base-branch", help="基準ブランチを明示指定します")
     review.add_argument(
         "--target",
         required=True,
         choices=["base", "uncommitted", "staged", "commits", "file"],
         help="レビュー対象差分の種別",
     )
-    review.set_defaults(func=handle_not_implemented)
+    review.set_defaults(func=handle_review)
 
     show_latest = subparsers.add_parser("show-latest", help="指定リポジトリの最新レビュー結果を表示します")
     show_latest.add_argument("--repo", required=True, help="レビュー対象のローカルGitリポジトリパス")
@@ -54,6 +56,21 @@ def handle_validate_config(_args: argparse.Namespace) -> int:
     print("設定検証に成功しました。")
     print(f"Copilot CLI: {info.executable}")
     print(f"Version: {info.version}")
+    return 0
+
+
+def handle_review(args: argparse.Namespace) -> int:
+    repository = resolve_repository(args.repo, base_branch=args.base_branch)
+    print("リポジトリ検証に成功しました。")
+    print(f"Repository root: {repository.root}")
+    print(f"Git common dir: {repository.git_common_dir}")
+    print(f"Project ID: {repository.project_id}")
+    print(f"Remote: {repository.remote_url or '(none)'}")
+    print(f"Current branch: {repository.current_branch}")
+    print(f"HEAD SHA: {repository.head_sha}")
+    print(f"Base branch: {repository.base_branch}")
+    print(f"Target: {args.target}")
+    print("レビューエンジン実行は後続Issueで実装します。Copilot CLIは呼び出していません。")
     return 0
 
 
@@ -84,6 +101,9 @@ def main(argv: list[str] | None = None) -> int:
     except CommandNotImplementedError as exc:
         print(str(exc), file=sys.stderr)
         return 4
+    except RepositoryError as exc:
+        print(str(exc), file=sys.stderr)
+        return 5
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         return 1

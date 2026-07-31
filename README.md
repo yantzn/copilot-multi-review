@@ -37,13 +37,25 @@ copilot version
 ai-review --help
 ai-review validate-config
 ai-review review --repo <path> --target base
+ai-review review --repo <path> --target base --base-branch main
 ai-review show-latest --repo <path>
 ai-review cancel --repo <path>
 ```
 
 `python -m ai_review --help`でも起動できます。
 
-現時点では`review`、`show-latest`、`cancel`は入口だけを定義しており、後続Issueで実装します。未実装コマンドは明確なエラーを返します。
+`review --repo <path>`は外部のローカルGitリポジトリを検証し、worktree、remote、現在ブランチ、HEAD SHA、基準ブランチ、project IDを表示します。
+
+基準ブランチは次の順で判定します。
+
+1. `--base-branch`
+2. `origin/HEAD`
+3. `main`
+4. `develop`
+
+判定できない場合は、自動fetchせずにエラーになります。
+
+現時点では`show-latest`、`cancel`は入口だけを定義しており、後続Issueで実装します。未実装コマンドは明確なエラーを返します。
 
 ## ディレクトリ
 
