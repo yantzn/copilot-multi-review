@@ -72,6 +72,8 @@ ai-review cancel --repo <path>
 
 単独エージェントは`--agent security`のように指定できます。差分収集だけを確認したい場合は`--no-agents`を指定してください。
 
+Copilot送信前には差分内のシークレット候補を検査します。confirmed候補が1件でもある場合、Copilot CLIを呼ばずに`BLOCKED`として扱います。検出器定義や専用テストfixtureの自己誤検知は、ファイル位置と文脈を確認して非ブロッキングに分類します。
+
 現時点では`show-latest`、`cancel`は入口だけを定義しており、後続Issueで実装します。未実装コマンドは明確なエラーを返します。
 
 ## ディレクトリ

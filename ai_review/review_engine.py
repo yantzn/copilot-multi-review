@@ -13,6 +13,7 @@ from .diff_collector import DiffSummary
 from .processes import decode_output
 from .quality import QualityCheckResult
 from .repository import RepositoryContext
+from .secrets import scan_diff_for_secrets
 
 
 class ReviewEngineError(RuntimeError):
@@ -80,6 +81,16 @@ class CopilotClient:
 
 def run_review_engine(request: EngineRequest, client: CopilotClient | None = None) -> EngineResult:
     client = client or CopilotClient()
+    secret_scan = scan_diff_for_secrets(request.diff)
+    if secret_scan.blocked:
+        return EngineResult(
+            run_id=request.run_id,
+            provider=client.provider,
+            agent_states={agent: "skipped" for agent in AGENT_ORDER},
+            agent_results=[],
+            final_decision="BLOCKED",
+            max_concurrent_copilot_processes=0,
+        )
     selected_agents = [request.agent] if request.agent else list(AGENT_ORDER)
     if request.agent and request.agent not in AGENT_ORDER:
         raise ReviewEngineError(f"未知のエージェントです: {request.agent}")
