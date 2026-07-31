@@ -15,6 +15,18 @@ from .quality import UnsafeCommandError, run_quality_checks
 from .repository import RepositoryError, resolve_repository
 from .review_engine import EngineRequest, ReviewEngineError, new_run_id, run_review_engine
 from .secrets import scan_diff_for_secrets
+from .storage import (
+    LockHeldError,
+    RootPaths,
+    StorageError,
+    acquire_review_lock,
+    cleanup_locks,
+    latest_report,
+    load_latest,
+    request_cancel,
+    save_review_result,
+)
+from .review_engine import EngineResult
 
 
 class CommandNotImplementedError(RuntimeError):
@@ -62,11 +74,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     show_latest = subparsers.add_parser("show-latest", help="指定リポジトリの最新レビュー結果を表示します")
     show_latest.add_argument("--repo", required=True, help="レビュー対象のローカルGitリポジトリパス")
-    show_latest.set_defaults(func=handle_not_implemented)
+    show_latest.set_defaults(func=handle_show_latest)
 
     cancel = subparsers.add_parser("cancel", help="指定リポジトリの実行中レビューを停止します")
     cancel.add_argument("--repo", required=True, help="レビュー対象のローカルGitリポジトリパス")
-    cancel.set_defaults(func=handle_not_implemented)
+    cancel.add_argument("--run-id", help="現在run IDと一致する場合だけcancelします")
+    cancel.set_defaults(func=handle_cancel)
+
+    rerun = subparsers.add_parser("rerun", help="指定リポジトリの前回条件で再実行します")
+    rerun.add_argument("--repo", required=True, help="レビュー対象のローカルGitリポジトリパス")
+    rerun.add_argument("--no-agents", action="store_true", help="Copilotエージェントを起動せず収集結果だけ表示します")
+    rerun.set_defaults(func=handle_rerun)
+
+    cleanup = subparsers.add_parser("cleanup-locks", help="指定リポジトリのruntime lockを安全に掃除します")
+    cleanup.add_argument("--repo", required=True, help="レビュー対象のローカルGitリポジトリパス")
+    cleanup.add_argument("--apply", action="store_true", help="dry-runではなく削除を実行します")
+    cleanup.set_defaults(func=handle_cleanup_locks)
 
     return parser
 
@@ -108,21 +131,83 @@ def handle_review(args: argparse.Namespace) -> int:
     print("Quality checks:")
     for result in quality:
         print(f"- {result.name or '(none)'}: {result.status}")
-    if args.no_agents:
-        print("エージェント実行は--no-agentsによりスキップしました。Copilot CLIは呼び出していません。")
-        return 0
-    engine_result = run_review_engine(
-        EngineRequest(
-            repository=repository,
+    paths = RootPaths.from_engine_root()
+    run_id = new_run_id()
+    with acquire_review_lock(paths, repository, run_id):
+        if args.no_agents:
+            print("エージェント実行は--no-agentsによりスキップしました。Copilot CLIは呼び出していません。")
+            engine_result = EngineResult(
+                run_id=run_id,
+                provider="github-copilot-cli",
+                agent_states={},
+                agent_results=[],
+                final_decision="INCONCLUSIVE",
+                max_concurrent_copilot_processes=0,
+            )
+        else:
+            engine_result = run_review_engine(
+                EngineRequest(
+                    repository=repository,
+                    diff=diff,
+                    quality_checks=quality,
+                    target=args.target,
+                    run_id=run_id,
+                    agent=args.agent,
+                    cancel_file=paths.runtime_root / repository.project_id / "cancel.json",
+                )
+            )
+        print(f"Final decision: {engine_result.final_decision}")
+        print(f"Max concurrent Copilot processes: {engine_result.max_concurrent_copilot_processes}")
+        save_review_result(
+            paths,
+            repository,
+            run_id=engine_result.run_id,
+            target=args.target,
+            request={"target": args.target, "agent": args.agent, "no_agents": args.no_agents},
             diff=diff,
             quality_checks=quality,
-            target=args.target,
-            run_id=new_run_id(),
-            agent=args.agent,
+            engine_result=engine_result,
+            copilot_version=None,
         )
+    print(f"Report: {paths.output_root / repository.project_id / 'latest' / 'report.md'}")
+    return 0
+
+
+def handle_show_latest(args: argparse.Namespace) -> int:
+    repository = resolve_repository(args.repo)
+    print(latest_report(RootPaths.from_engine_root(), repository.project_id))
+    return 0
+
+
+def handle_cancel(args: argparse.Namespace) -> int:
+    repository = resolve_repository(args.repo)
+    path = request_cancel(RootPaths.from_engine_root(), repository.project_id, args.run_id)
+    print(f"キャンセル要求を作成しました: {path}")
+    return 0
+
+
+def handle_rerun(args: argparse.Namespace) -> int:
+    repository = resolve_repository(args.repo)
+    latest = load_latest(RootPaths.from_engine_root(), repository.project_id)
+    target = latest.get("request", {}).get("target") or latest.get("target") or "base"
+    review_args = argparse.Namespace(
+        repo=args.repo,
+        base_branch=latest.get("base_branch"),
+        target=target,
+        commits=None,
+        file=None,
+        exclude=[],
+        quality_command=None,
+        agent=latest.get("request", {}).get("agent"),
+        no_agents=args.no_agents,
     )
-    print(f"Final decision: {engine_result.final_decision}")
-    print(f"Max concurrent Copilot processes: {engine_result.max_concurrent_copilot_processes}")
+    return handle_review(review_args)
+
+
+def handle_cleanup_locks(args: argparse.Namespace) -> int:
+    repository = resolve_repository(args.repo)
+    result = cleanup_locks(RootPaths.from_engine_root(), repository.project_id, dry_run=not args.apply)
+    print(result)
     return 0
 
 
@@ -162,6 +247,12 @@ def main(argv: list[str] | None = None) -> int:
     except ReviewEngineError as exc:
         print(str(exc), file=sys.stderr)
         return 7
+    except LockHeldError as exc:
+        print(str(exc), file=sys.stderr)
+        return 8
+    except StorageError as exc:
+        print(str(exc), file=sys.stderr)
+        return 9
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         return 1

@@ -76,6 +76,16 @@ Copilot送信前には差分内のシークレット候補を検査します。c
 
 Windowsでは`copilot.exe`、`copilot.cmd`、`copilot.bat`、`copilot`の順でGitHub Copilot CLIを解決します。`.cmd`または`.bat`の場合だけ、`COMSPEC /d /c call <resolved-path> ...`の固定引数配列で起動します。外部コマンド出力はbytesで受け取り、UTF-8、cp932、UTF-8 replacementの順でdecodeします。
 
+レビュー結果はこの専用リポジトリの`reports/<project-id>/latest`と`reports/<project-id>/history/<run-id>`へ保存します。実行状態とキャンセル要求は`runtime/<project-id>`へ保存し、対象リポジトリには作成しません。
+
+```bash
+ai-review show-latest --repo <path>
+ai-review rerun --repo <path>
+ai-review cancel --repo <path>
+ai-review cleanup-locks --repo <path>
+ai-review cleanup-locks --repo <path> --apply
+```
+
 現時点では`show-latest`、`cancel`は入口だけを定義しており、後続Issueで実装します。未実装コマンドは明確なエラーを返します。
 
 ## ディレクトリ
