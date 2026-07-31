@@ -77,6 +77,23 @@ runtime/    実行状態とロック。Git管理対象外
 
 後続Issueで、VS Codeの実行とデバッグ画面から対象リポジトリ選択と実行確認を行う構成を追加します。
 
+実行とデバッグ画面から次の構成を選択できます。
+
+- Copilotレビュー：全エージェント
+- Copilotレビュー：未コミット差分
+- Copilotレビュー：ステージ済み差分
+- Copilotレビュー：Security
+- Copilotレビュー：前回条件で再実行
+- Copilotレビュー：前回結果を表示
+- Copilotレビュー：実行停止
+- Copilotレビュー：設定検証
+
+▶を押すとOS標準のフォルダ選択ダイアログが開き、対象Gitリポジトリの情報と差分規模を確認してから実行できます。headless環境でダイアログを開けない場合は、CLIで次のように実行してください。
+
+```bash
+python -m ai_review review --repo <path> --target base
+```
+
 ## 検証
 
 ```bash

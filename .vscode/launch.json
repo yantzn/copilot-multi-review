@@ -1,0 +1,101 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Copilotレビュー：全エージェント",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "ai_review.vscode_launcher",
+      "args": ["--target", "base", "--agents", "all"],
+      "console": "integratedTerminal",
+      "env": {
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8"
+      }
+    },
+    {
+      "name": "Copilotレビュー：未コミット差分",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "ai_review.vscode_launcher",
+      "args": ["--target", "uncommitted", "--agents", "all"],
+      "console": "integratedTerminal",
+      "env": {
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8"
+      }
+    },
+    {
+      "name": "Copilotレビュー：ステージ済み差分",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "ai_review.vscode_launcher",
+      "args": ["--target", "staged", "--agents", "all"],
+      "console": "integratedTerminal",
+      "env": {
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8"
+      }
+    },
+    {
+      "name": "Copilotレビュー：Security",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "ai_review.vscode_launcher",
+      "args": ["--target", "base", "--agents", "security"],
+      "console": "integratedTerminal",
+      "env": {
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8"
+      }
+    },
+    {
+      "name": "Copilotレビュー：前回条件で再実行",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "ai_review.vscode_launcher",
+      "args": ["--action", "rerun"],
+      "console": "integratedTerminal",
+      "env": {
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8"
+      }
+    },
+    {
+      "name": "Copilotレビュー：前回結果を表示",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "ai_review.vscode_launcher",
+      "args": ["--action", "show-latest"],
+      "console": "integratedTerminal",
+      "env": {
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8"
+      }
+    },
+    {
+      "name": "Copilotレビュー：実行停止",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "ai_review.vscode_launcher",
+      "args": ["--action", "cancel"],
+      "console": "integratedTerminal",
+      "env": {
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8"
+      }
+    },
+    {
+      "name": "Copilotレビュー：設定検証",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "ai_review.vscode_launcher",
+      "args": ["--action", "validate-config"],
+      "console": "integratedTerminal",
+      "env": {
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8"
+      }
+    }
+  ]
+}
