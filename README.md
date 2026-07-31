@@ -58,6 +58,20 @@ ai-review cancel --repo <path>
 
 品質チェックは共通allowlistに含まれるコマンドのみ実行できます。パイプ、リダイレクト、コマンド置換、PowerShell式評価、`git fetch`、`git checkout`、`git reset`は拒否します。
 
+エージェント実行では、1つのGitHub Copilot CLIを9種類の論理エージェントとして次の順に直列実行します。
+
+1. requirements
+2. correctness
+3. security
+4. testing
+5. maintainability
+6. performance
+7. operations
+8. devil_advocate
+9. final
+
+単独エージェントは`--agent security`のように指定できます。差分収集だけを確認したい場合は`--no-agents`を指定してください。
+
 現時点では`show-latest`、`cancel`は入口だけを定義しており、後続Issueで実装します。未実装コマンドは明確なエラーを返します。
 
 ## ディレクトリ
