@@ -14,6 +14,7 @@ from .diff_collector import DiffCollectionError, collect_diff
 from .quality import UnsafeCommandError, run_quality_checks
 from .repository import RepositoryError, resolve_repository
 from .review_engine import EngineRequest, ReviewEngineError, new_run_id, run_review_engine
+from .secrets import scan_diff_for_secrets
 
 
 class CommandNotImplementedError(RuntimeError):
@@ -101,6 +102,9 @@ def handle_review(args: argparse.Namespace) -> int:
     print(f"Diff lines: {diff.diff_line_count}")
     print(f"Truncated: {diff.truncated}")
     print(f"Requirements context: {', '.join(diff.requirements_context) or '(none)'}")
+    secret_scan = scan_diff_for_secrets(diff)
+    print(f"Secret findings: {len(secret_scan.findings)}")
+    print(f"Secret blocked: {secret_scan.blocked}")
     print("Quality checks:")
     for result in quality:
         print(f"- {result.name or '(none)'}: {result.status}")
