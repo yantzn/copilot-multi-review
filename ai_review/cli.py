@@ -10,6 +10,8 @@ from .copilot import (
     ensure_supported_python,
     get_copilot_version,
 )
+from .diff_collector import DiffCollectionError, collect_diff
+from .quality import UnsafeCommandError, run_quality_checks
 from .repository import RepositoryError, resolve_repository
 
 
@@ -32,6 +34,10 @@ def build_parser() -> argparse.ArgumentParser:
     review = subparsers.add_parser("review", help="指定したローカルGitリポジトリをレビューします")
     review.add_argument("--repo", required=True, help="レビュー対象のローカルGitリポジトリパス")
     review.add_argument("--base-branch", help="基準ブランチを明示指定します")
+    review.add_argument("--commits", help="--target commitsで使うコミット範囲")
+    review.add_argument("--file", help="--target fileで使うリポジトリ内ファイル")
+    review.add_argument("--exclude", action="append", default=[], help="除外するリポジトリ相対パスprefix")
+    review.add_argument("--quality-command", action="append", help="allowlist済み品質チェックコマンド")
     review.add_argument(
         "--target",
         required=True,
@@ -61,6 +67,14 @@ def handle_validate_config(_args: argparse.Namespace) -> int:
 
 def handle_review(args: argparse.Namespace) -> int:
     repository = resolve_repository(args.repo, base_branch=args.base_branch)
+    diff = collect_diff(
+        repository,
+        target=args.target,
+        commits=args.commits,
+        file_path=args.file,
+        excludes=args.exclude,
+    )
+    quality = run_quality_checks(repository.root, args.quality_command)
     print("リポジトリ検証に成功しました。")
     print(f"Repository root: {repository.root}")
     print(f"Git common dir: {repository.git_common_dir}")
@@ -70,6 +84,13 @@ def handle_review(args: argparse.Namespace) -> int:
     print(f"HEAD SHA: {repository.head_sha}")
     print(f"Base branch: {repository.base_branch}")
     print(f"Target: {args.target}")
+    print(f"Changed files: {diff.changed_file_count}")
+    print(f"Diff lines: {diff.diff_line_count}")
+    print(f"Truncated: {diff.truncated}")
+    print(f"Requirements context: {', '.join(diff.requirements_context) or '(none)'}")
+    print("Quality checks:")
+    for result in quality:
+        print(f"- {result.name or '(none)'}: {result.status}")
     print("レビューエンジン実行は後続Issueで実装します。Copilot CLIは呼び出していません。")
     return 0
 
@@ -104,6 +125,9 @@ def main(argv: list[str] | None = None) -> int:
     except RepositoryError as exc:
         print(str(exc), file=sys.stderr)
         return 5
+    except (DiffCollectionError, UnsafeCommandError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 6
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         return 1
