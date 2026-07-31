@@ -45,6 +45,7 @@ ai-review cancel --repo <path>
 `python -m ai_review --help`でも起動できます。
 
 `review --repo <path>`は外部のローカルGitリポジトリを検証し、worktree、remote、現在ブランチ、HEAD SHA、基準ブランチ、project IDを表示します。
+あわせて`base`、`uncommitted`、`staged`、`commits`、`file`の差分規模、変更ファイル、README等の要件候補、品質チェック結果をCopilot実行前に収集します。
 
 基準ブランチは次の順で判定します。
 
@@ -54,6 +55,8 @@ ai-review cancel --repo <path>
 4. `develop`
 
 判定できない場合は、自動fetchせずにエラーになります。
+
+品質チェックは共通allowlistに含まれるコマンドのみ実行できます。パイプ、リダイレクト、コマンド置換、PowerShell式評価、`git fetch`、`git checkout`、`git reset`は拒否します。
 
 現時点では`show-latest`、`cancel`は入口だけを定義しており、後続Issueで実装します。未実装コマンドは明確なエラーを返します。
 
