@@ -9,6 +9,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 
 from .repository import RepositoryContext, RepositoryError, resolve_repository
+from .repository_audit import AuditError, AuditOptions, analyze_repository
 
 
 AGENT_LABELS = {
@@ -28,14 +29,22 @@ class ReviewPreview:
     has_uncommitted: bool
     has_staged: bool
     quality_checks: str
+    audit_profile: str | None = None
+    audit_target_file_count: int | None = None
+    audit_excluded_file_count: int | None = None
+    audit_estimated_total_lines: int | None = None
+    audit_batch_count: int | None = None
+    audit_expected_copilot_calls: int | None = None
+    audit_unreviewed_planned: int | None = None
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="VS Code launch helper for ai-review.")
     parser.add_argument("--target", default="base", choices=["base", "uncommitted", "staged", "commits", "file"])
     parser.add_argument("--agents", default="all", choices=sorted(AGENT_LABELS))
+    parser.add_argument("--profile", default="standard", choices=["quick", "standard", "deep"])
     parser.add_argument("--base-branch")
-    parser.add_argument("--action", default="review", choices=["review", "rerun", "show-latest", "cancel", "validate-config"])
+    parser.add_argument("--action", default="review", choices=["review", "audit", "rerun", "show-latest", "cancel", "status", "validate-config"])
     return parser
 
 
@@ -58,10 +67,38 @@ def collect_preview(repo_path: str, *, target: str, agents: str, base_branch: st
     )
 
 
+def collect_audit_preview(repo_path: str, *, profile: str, base_branch: str | None = None) -> ReviewPreview:
+    repository = resolve_repository(repo_path, base_branch=base_branch)
+    analysis, batches = analyze_repository(repository, AuditOptions(profile=profile))
+    has_uncommitted = bool(_optional_git(repository.root, "status", "--porcelain"))
+    has_staged = bool(_optional_git(repository.root, "diff", "--cached", "--name-only"))
+    return ReviewPreview(
+        repository=repository,
+        target="repository_audit",
+        agents="profile:" + profile,
+        changed_file_count=0,
+        diff_line_count=0,
+        truncated=False,
+        has_uncommitted=has_uncommitted,
+        has_staged=has_staged,
+        quality_checks=_detect_quality_checks(repository.root),
+        audit_profile=profile,
+        audit_target_file_count=len(analysis.target_files),
+        audit_excluded_file_count=sum(1 for item in analysis.coverage if item.status == "excluded"),
+        audit_estimated_total_lines=analysis.estimated_total_lines,
+        audit_batch_count=len(batches),
+        audit_expected_copilot_calls=analysis.expected_copilot_calls,
+        audit_unreviewed_planned=sum(1 for item in analysis.coverage if item.status == "unreviewed"),
+    )
+
+
 def run(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.action == "validate-config":
         return _run_ai_review(["validate-config"])
+
+    if args.action == "status":
+        return _run_ai_review(["status"])
 
     if args.action in {"show-latest", "cancel", "rerun"}:
         repo = _select_repository()
@@ -77,13 +114,18 @@ def run(argv: list[str] | None = None) -> int:
             print("対象リポジトリ選択がキャンセルされました。")
             return 0
         try:
-            preview = collect_preview(repo, target=args.target, agents=args.agents, base_branch=args.base_branch)
-        except RepositoryError as exc:
+            if args.action == "audit":
+                preview = collect_audit_preview(repo, profile=args.profile, base_branch=args.base_branch)
+            else:
+                preview = collect_preview(repo, target=args.target, agents=args.agents, base_branch=args.base_branch)
+        except (RepositoryError, AuditError) as exc:
             _show_error("Gitリポジトリではありません", str(exc))
             continue
 
         decision = _confirm_execution(preview)
         if decision == "run":
+            if args.action == "audit":
+                return _run_ai_review(["audit", "--repo", str(preview.repository.root), "--profile", args.profile])
             return _run_ai_review(["review", "--repo", str(preview.repository.root), "--target", args.target])
         if decision == "cancel":
             print("レビュー実行がキャンセルされました。")
@@ -114,24 +156,41 @@ def _select_repository() -> str | None:
 
 
 def _confirm_execution(preview: ReviewPreview) -> str:
-    message = "\n".join(
-        [
-            f"対象リポジトリ: {preview.repository.root}",
-            f"project ID: {preview.repository.project_id}",
-            f"現在ブランチ: {preview.repository.current_branch}",
-            f"基準ブランチ: {preview.repository.base_branch}",
-            f"レビュー種別: {preview.target}",
-            f"実行エージェント: {preview.agents}",
-            f"変更ファイル数: {preview.changed_file_count}",
-            f"差分行数: {preview.diff_line_count}",
-            f"切り捨て予定: {'あり' if preview.truncated else 'なし'}",
-            f"未コミット差分を含むか: {'はい' if preview.has_uncommitted else 'いいえ'}",
-            f"ステージ済み差分を含むか: {'はい' if preview.has_staged else 'いいえ'}",
-            f"品質チェック検出結果: {preview.quality_checks}",
-            "",
-            "実行しますか？",
-        ]
-    )
+    lines = [
+        f"対象リポジトリ: {preview.repository.root}",
+        f"project ID: {preview.repository.project_id}",
+        f"現在ブランチ: {preview.repository.current_branch}",
+        f"HEAD SHA: {preview.repository.head_sha}",
+    ]
+    if preview.audit_profile:
+        lines.extend(
+            [
+                f"レビュー種別: {preview.target}",
+                f"profile: {preview.audit_profile}",
+                f"対象ファイル数: {preview.audit_target_file_count}",
+                f"除外ファイル数: {preview.audit_excluded_file_count}",
+                f"推定総行数: {preview.audit_estimated_total_lines}",
+                f"想定バッチ数: {preview.audit_batch_count}",
+                f"想定Copilot呼び出し数: {preview.audit_expected_copilot_calls}",
+                "上限超過: なし",
+                f"未確認予定: {preview.audit_unreviewed_planned}",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                f"基準ブランチ: {preview.repository.base_branch}",
+                f"レビュー種別: {preview.target}",
+                f"実行エージェント: {preview.agents}",
+                f"変更ファイル数: {preview.changed_file_count}",
+                f"差分行数: {preview.diff_line_count}",
+                f"切り捨て予定: {'あり' if preview.truncated else 'なし'}",
+                f"未コミット差分を含むか: {'はい' if preview.has_uncommitted else 'いいえ'}",
+                f"ステージ済み差分を含むか: {'はい' if preview.has_staged else 'いいえ'}",
+                f"品質チェック検出結果: {preview.quality_checks}",
+            ]
+        )
+    message = "\n".join([*lines, "", "実行しますか？"])
     answer = messagebox.askyesnocancel(title="Copilotレビュー実行確認", message=message)
     if answer is True:
         return "run"

@@ -167,3 +167,34 @@ python -m json.tool .vscode/extensions.json
 ```
 
 詳しい設計は`docs/architecture.md`、運用手順は`docs/operations.md`、復旧方法は`docs/troubleshooting.md`を参照してください。
+## リポジトリ全体監査
+
+日常の確認は従来どおり `base`、`uncommitted`、`staged`、`commits`、`file` の差分レビューを推奨します。リポジトリ全体監査は、初回導入時、設計の棚卸し、横断的なセキュリティ境界確認、テスト不足の全体把握に使う長時間モードです。
+
+```bash
+ai-review audit --repo <path>
+ai-review audit --repo <path> --profile quick
+ai-review audit --repo <path> --profile standard
+ai-review audit --repo <path> --profile deep
+ai-review review --repo <path> --target repository
+```
+
+`quick` は各バッチで `correctness` と `security` を実行し、最後に `final` で統合します。`standard` は各バッチで `correctness`、`security`、`testing`、`maintainability` を実行し、横断統合で `requirements`、`performance`、`operations`、`devil_advocate`、`final` を実行します。`deep` は各バッチで専門エージェントを広く実行し、最後に統合します。
+
+Git管理対象ファイルは `git ls-files -z` でNUL区切り収集します。`--include-untracked` を指定した場合のみ、安全に読める未追跡テキストファイルを追加します。`.git/`、`.venv/`、`node_modules/`、`vendor/`、`dist/`、`build/`、`coverage/`、`__pycache__/`、生成メディア、バイナリ、大容量データ、ログ、`.env`、秘密鍵系ファイルは既定で除外またはブロック対象になり、理由は `coverage.json` に保存されます。
+
+全ファイルを1つの巨大なプロンプトへ詰め込まず、上位ディレクトリ、言語、実装ファイルと関連テスト、推定行数、payloadサイズをもとに `batch-001` 形式の安定したバッチへ分割します。既定上限は `config/common.json` の `repository_audit` で管理します。
+
+```bash
+ai-review audit --repo <path> --max-batches 30 --max-files 1000 --max-total-lines 100000 --max-copilot-calls 150
+ai-review audit --repo <path> --rerun
+```
+
+実行状況は次で確認できます。
+
+```bash
+ai-review status --repo <path>
+ai-review status --repo <path> --watch
+```
+
+レポートは対象リポジトリではなく、この専用リポジトリの `reports/<project-id>/history/<run-id>/` と `reports/<project-id>/latest/` に保存されます。`repository-summary.json` は全体集計、`coverage.json` はファイルごとの `reviewed`、`excluded`、`skipped`、`failed`、`blocked`、`unreviewed` を示します。未確認ファイルや失敗バッチがある場合、最終判定は無条件に `APPROVE` になりません。

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import re
+from typing import Any
 
 from .diff_collector import DiffSummary
 
@@ -39,12 +40,28 @@ PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("database_url", re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://[^:\s]+:[^@\s]+@[^/\s]+")),
 )
 
+PEM_END_MARKERS = {
+    "pem_certificate": ("-----END CERTIFICATE-----",),
+    "pem_private_key": (
+        "-----END PRIVATE KEY-----",
+        "-----END RSA PRIVATE KEY-----",
+        "-----END EC PRIVATE KEY-----",
+        "-----END OPENSSH PRIVATE KEY-----",
+        "-----END DSA PRIVATE KEY-----",
+    ),
+}
+
+PAYLOAD_EXCLUDED_KEYS = {"secret_findings", "excluded_files", "diff"}
+BASE64_LINE = re.compile(r"^[A-Za-z0-9+/=]{4,}$")
+
 
 def scan_diff_for_secrets(diff: DiffSummary) -> SecretScanResult:
     findings: list[SecretFinding] = []
     seen: set[tuple[str, str | None, int | None, str]] = set()
     current_file: str | None = None
-    for line_number, line in enumerate(diff.diff_text.splitlines(), start=1):
+    lines = diff.diff_text.splitlines()
+    for index, line in enumerate(lines):
+        line_number = index + 1
         if line.startswith("+++ b/"):
             current_file = line.removeprefix("+++ b/")
             continue
@@ -53,7 +70,7 @@ def scan_diff_for_secrets(diff: DiffSummary) -> SecretScanResult:
         content = line[1:]
         for category, pattern in PATTERNS:
             for match in pattern.finditer(content):
-                classification = classify_secret_candidate(current_file, content, category)
+                classification = classify_secret_candidate(current_file, content, category, lines[index + 1 :])
                 fingerprint = _fingerprint(match.group(0))
                 key = (category, current_file, line_number, fingerprint)
                 if key in seen:
@@ -72,7 +89,63 @@ def scan_diff_for_secrets(diff: DiffSummary) -> SecretScanResult:
     return SecretScanResult(findings=findings)
 
 
-def classify_secret_candidate(file: str | None, line: str, category: str) -> str:
+def scan_payload(payload: Any) -> SecretScanResult:
+    findings: list[SecretFinding] = []
+    seen: set[tuple[str, str | None, int | None, str]] = set()
+
+    def walk(value: Any, path: list[str], context_file: str | None) -> None:
+        if isinstance(value, dict):
+            next_context = str(value.get("file") or value.get("path") or context_file) if value else context_file
+            for child_key, child in value.items():
+                if child_key in PAYLOAD_EXCLUDED_KEYS:
+                    continue
+                walk(child, [*path, str(child_key)], next_context)
+            return
+        if isinstance(value, list):
+            for index, child in enumerate(value):
+                walk(child, [*path, str(index)], context_file)
+            return
+        if not isinstance(value, str):
+            return
+
+        source_path = ".".join(path)
+        for category, pattern in PATTERNS:
+            for match in pattern.finditer(value):
+                classification = classify_secret_candidate(context_file, value, category, [])
+                fingerprint = _fingerprint(match.group(0))
+                key = (category, context_file, None, fingerprint)
+                if key in seen:
+                    continue
+                seen.add(key)
+                findings.append(
+                    SecretFinding(
+                        category=category,
+                        classification=classification,
+                        source=f"payload:{source_path}",
+                        file=context_file,
+                        line=None,
+                        fingerprint=fingerprint,
+                    )
+                )
+
+    walk(payload, [], None)
+    return SecretScanResult(findings)
+
+
+def combine_secret_scans(*scans: SecretScanResult) -> SecretScanResult:
+    findings: list[SecretFinding] = []
+    seen: set[tuple[str, str | None, int | None, str]] = set()
+    for scan in scans:
+        for finding in scan.findings:
+            key = (finding.category, finding.file, finding.line, finding.fingerprint)
+            if key in seen:
+                continue
+            seen.add(key)
+            findings.append(finding)
+    return SecretScanResult(findings)
+
+
+def classify_secret_candidate(file: str | None, line: str, category: str, following_lines: list[str] | None = None) -> str:
     normalized = (file or "").replace("\\", "/")
     lowered = line.lower()
     if normalized in {"ai_review/secrets.py"} or normalized.startswith("tests/"):
@@ -85,10 +158,29 @@ def classify_secret_candidate(file: str | None, line: str, category: str) -> str
             or "diff_text" in line
         ):
             return "detector_definition" if normalized == "ai_review/secrets.py" else "test_fixture"
-    if category == "pem_certificate" and "BEGIN CERTIFICATE" in line and "END CERTIFICATE" not in line:
+    if category in PEM_END_MARKERS and not _pem_has_real_block(category, line, following_lines or []):
         if normalized == "ai_review/secrets.py" or normalized.startswith("tests/"):
             return "detector_definition" if normalized == "ai_review/secrets.py" else "test_fixture"
+        return "malformed_pem"
     return "confirmed"
+
+
+def _pem_has_real_block(category: str, start_line: str, following_lines: list[str]) -> bool:
+    end_markers = PEM_END_MARKERS.get(category)
+    if not end_markers:
+        return True
+    body_lines = 0
+    for raw_line in [start_line, *following_lines]:
+        stripped = raw_line.removeprefix("+").strip().strip("'\"")
+        if any(stripped.startswith(marker) for marker in end_markers):
+            return body_lines > 0
+        if stripped.startswith("-----BEGIN "):
+            continue
+        if stripped.startswith("-----END "):
+            return False
+        if BASE64_LINE.fullmatch(stripped):
+            body_lines += 1
+    return False
 
 
 def _fingerprint(value: str) -> str:

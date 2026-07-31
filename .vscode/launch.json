@@ -96,6 +96,54 @@
         "PYTHONUTF8": "1",
         "PYTHONIOENCODING": "utf-8"
       }
+    },
+    {
+      "name": "Copilotレビュー: リポジトリ全体監査（quick）",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "ai_review.vscode_launcher",
+      "args": ["--action", "audit", "--profile", "quick"],
+      "console": "integratedTerminal",
+      "env": {
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8"
+      }
+    },
+    {
+      "name": "Copilotレビュー: リポジトリ全体監査（standard）",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "ai_review.vscode_launcher",
+      "args": ["--action", "audit", "--profile", "standard"],
+      "console": "integratedTerminal",
+      "env": {
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8"
+      }
+    },
+    {
+      "name": "Copilotレビュー: リポジトリ全体監査（deep）",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "ai_review.vscode_launcher",
+      "args": ["--action", "audit", "--profile", "deep"],
+      "console": "integratedTerminal",
+      "env": {
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8"
+      }
+    },
+    {
+      "name": "Copilotレビュー: 実行状況を表示",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "ai_review.vscode_launcher",
+      "args": ["--action", "status"],
+      "console": "integratedTerminal",
+      "env": {
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8"
+      }
     }
   ]
 }

@@ -15,9 +15,12 @@ from ai_review.storage import (
     RootPaths,
     acquire_review_lock,
     cleanup_locks,
+    format_running_status,
     latest_report,
+    load_running_statuses,
     request_cancel,
     save_review_result,
+    update_running_status,
 )
 
 
@@ -84,7 +87,21 @@ def test_cancel_only_current_run_id(tmp_path: Path) -> None:
     paths = RootPaths.from_engine_root(tmp_path / "engine")
     repository = resolve_repository(str(target))
 
-    with acquire_review_lock(paths, repository, "run-1"):
+    with acquire_review_lock(paths, repository, "run-1") as lock:
+        update_running_status(
+            lock,
+            status="running",
+            current_agent="security",
+            current_agent_index=3,
+            total_agents=9,
+            completed_agents=["requirements", "correctness"],
+            pending_agents=["testing"],
+        )
+        statuses = load_running_statuses(paths, repository.project_id)
+        assert statuses[0]["current_agent"] == "security"
+        formatted = format_running_status(statuses[0])
+        assert "進捗: 3 / 9" in formatted
+        assert "- requirements" in formatted
         with pytest.raises(Exception):
             request_cancel(paths, repository.project_id, "other")
         cancel = request_cancel(paths, repository.project_id, "run-1")

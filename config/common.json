@@ -16,5 +16,14 @@
   "output": {
     "reports_dir": "reports",
     "runtime_dir": "runtime"
+  },
+  "repository_audit": {
+    "profile": "standard",
+    "max_batches": 30,
+    "max_files": 1000,
+    "max_total_lines": 100000,
+    "max_copilot_calls": 150,
+    "max_files_per_batch": 30,
+    "max_lines_per_batch": 5000
   }
 }

@@ -70,6 +70,15 @@ def test_launch_config_sets_utf8_env() -> None:
         assert item["env"]["PYTHONIOENCODING"] == "utf-8"
 
 
+def test_tasks_json_has_status_task() -> None:
+    tasks = json.loads(Path(".vscode/tasks.json").read_text(encoding="utf-8"))
+    status_task = next(item for item in tasks["tasks"] if item["label"] == "Copilotレビュー: 実行状況を表示")
+
+    assert status_task["type"] == "process"
+    assert status_task["args"] == ["-m", "ai_review", "status"]
+    assert status_task["options"]["env"]["PYTHONUTF8"] == "1"
+
+
 def test_select_repository_keyboard_interrupt_is_cancel(monkeypatch, capsys) -> None:
     class FakeRoot:
         destroyed = False

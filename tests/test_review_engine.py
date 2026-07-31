@@ -75,8 +75,18 @@ def request_for(repo: Path, *, agent: str | None = None, run_id: str = "run-1") 
 def test_runs_nine_agents_serially(tmp_path: Path) -> None:
     repo = init_repo(tmp_path / "repo")
     client = FakeClient()
+    progress: list[dict] = []
+    request = request_for(repo)
+    request = EngineRequest(
+        repository=request.repository,
+        diff=request.diff,
+        quality_checks=request.quality_checks,
+        target=request.target,
+        run_id=request.run_id,
+        progress_callback=progress.append,
+    )
 
-    result = run_review_engine(request_for(repo), client)
+    result = run_review_engine(request, client)
 
     assert client.calls == [
         "requirements",
@@ -91,6 +101,9 @@ def test_runs_nine_agents_serially(tmp_path: Path) -> None:
     ]
     assert result.max_concurrent_copilot_processes == 1
     assert all(state == "completed" for state in result.agent_states.values())
+    assert progress[0]["current_agent"] == "requirements"
+    assert progress[0]["current_agent_index"] == 1
+    assert progress[0]["total_agents"] == 9
 
 
 def test_single_agent_run_skips_others(tmp_path: Path) -> None:

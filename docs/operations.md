@@ -98,3 +98,51 @@ Validated in this development environment:
 10. Windows BAT/CMD: automated command construction tests passed
 
 Manual GUI selection and real Copilot CLI execution were not performed because this environment is headless for UI confirmation and Copilot CLI is not installed.
+
+## Repository Audit Operations
+
+Use repository audit when you need a full baseline of an external local Git repository. For daily development, prefer the existing diff review targets because they are faster and cheaper.
+
+```bash
+ai-review audit --repo <path>
+ai-review audit --repo <path> --profile quick
+ai-review audit --repo <path> --profile standard
+ai-review audit --repo <path> --profile deep
+```
+
+Useful limits:
+
+```bash
+ai-review audit --repo <path> --max-batches 30 --max-files 1000 --max-total-lines 100000 --max-copilot-calls 150
+```
+
+Untracked files are excluded unless explicitly requested:
+
+```bash
+ai-review audit --repo <path> --include-untracked
+```
+
+To repeat the previous full audit conditions for the same project ID:
+
+```bash
+ai-review audit --repo <path> --rerun
+```
+
+To watch progress:
+
+```bash
+ai-review status --repo <path>
+ai-review status --repo <path> --watch
+```
+
+To cancel the current run:
+
+```bash
+ai-review cancel --repo <path>
+```
+
+Cancellation stops only the current Copilot child process, prevents later batches and agents from starting, and preserves completed results. Pending items are recorded as cancelled or skipped in the final runtime/report state.
+
+VS Code includes quick, standard, and deep audit launch configurations. The flow is unchanged: press run, select the target Git repository, review the preflight summary, then choose whether to execute. Copilot is not called before confirmation.
+
+Audit reports are under `reports/<project-id>/history/<run-id>/` with `run.json`, `final.json`, `repository-summary.json`, `coverage.json`, `batches/`, `agents/`, and `report.md`. `latest/` is updated with the final result. Inspect `coverage.json` first when the final result is `INCONCLUSIVE` or `BLOCKED`.

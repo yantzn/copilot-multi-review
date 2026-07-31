@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import subprocess
 import time
+from typing import Callable
 import uuid
 
 from .agents import AGENT_ORDER, AgentResult, Finding, rule_based_decision, stricter_decision
@@ -13,7 +14,7 @@ from .diff_collector import DiffSummary
 from .processes import decode_output
 from .quality import QualityCheckResult
 from .repository import RepositoryContext
-from .secrets import scan_diff_for_secrets
+from .secrets import combine_secret_scans, scan_diff_for_secrets, scan_payload
 
 
 class ReviewEngineError(RuntimeError):
@@ -42,6 +43,7 @@ class EngineRequest:
     agent: str | None = None
     timeout_seconds: int = 120
     cancel_file: Path | None = None
+    progress_callback: Callable[[dict], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -81,7 +83,12 @@ class CopilotClient:
 
 def run_review_engine(request: EngineRequest, client: CopilotClient | None = None) -> EngineResult:
     client = client or CopilotClient()
-    secret_scan = scan_diff_for_secrets(request.diff)
+    selected_agents = [request.agent] if request.agent else list(AGENT_ORDER)
+    if request.agent and request.agent not in AGENT_ORDER:
+        raise ReviewEngineError(f"未知のエージェントです: {request.agent}")
+
+    initial_payload = _build_payload(request, selected_agents[0], [])
+    secret_scan = combine_secret_scans(scan_diff_for_secrets(request.diff), scan_payload(initial_payload))
     if secret_scan.blocked:
         return EngineResult(
             run_id=request.run_id,
@@ -91,9 +98,6 @@ def run_review_engine(request: EngineRequest, client: CopilotClient | None = Non
             final_decision="BLOCKED",
             max_concurrent_copilot_processes=0,
         )
-    selected_agents = [request.agent] if request.agent else list(AGENT_ORDER)
-    if request.agent and request.agent not in AGENT_ORDER:
-        raise ReviewEngineError(f"未知のエージェントです: {request.agent}")
 
     states = {agent: "pending" for agent in AGENT_ORDER}
     results: list[AgentResult] = []
@@ -101,11 +105,22 @@ def run_review_engine(request: EngineRequest, client: CopilotClient | None = Non
     current_concurrent = 0
     failed = False
 
-    for agent in selected_agents:
+    completed_agents: list[str] = []
+    total_agents = len(selected_agents)
+    for index, agent in enumerate(selected_agents, start=1):
         if _is_cancelled(request.cancel_file):
             states[agent] = "cancelled"
             raise AgentCancelledError(f"レビューがキャンセルされました: {request.run_id}")
         states[agent] = "running"
+        _emit_progress(
+            request,
+            status="running",
+            current_agent=agent,
+            current_agent_index=index,
+            total_agents=total_agents,
+            completed_agents=completed_agents,
+            pending_agents=selected_agents[index:],
+        )
         current_concurrent += 1
         max_concurrent = max(max_concurrent, current_concurrent)
         started = time.monotonic()
@@ -114,6 +129,7 @@ def run_review_engine(request: EngineRequest, client: CopilotClient | None = Non
             result = _run_agent_with_retry(client, prompt, request, agent)
             results.append(result)
             states[agent] = "completed"
+            completed_agents.append(agent)
         except subprocess.TimeoutExpired:
             states[agent] = "failed"
             failed = True
@@ -125,6 +141,15 @@ def run_review_engine(request: EngineRequest, client: CopilotClient | None = Non
         finally:
             current_concurrent -= 1
             _ = started
+            _emit_progress(
+                request,
+                status="running",
+                current_agent=None,
+                current_agent_index=index,
+                total_agents=total_agents,
+                completed_agents=completed_agents,
+                pending_agents=selected_agents[index:],
+            )
 
     for agent in AGENT_ORDER:
         if agent not in selected_agents and states[agent] == "pending":
@@ -132,7 +157,7 @@ def run_review_engine(request: EngineRequest, client: CopilotClient | None = Non
 
     ai_decision = results[-1].decision if results else "INCONCLUSIVE"
     rules = rule_based_decision(results, truncated=request.diff.truncated, failed=failed)
-    return EngineResult(
+    result = EngineResult(
         run_id=request.run_id,
         provider=client.provider,
         agent_states=states,
@@ -140,6 +165,16 @@ def run_review_engine(request: EngineRequest, client: CopilotClient | None = Non
         final_decision=stricter_decision(rules, ai_decision),
         max_concurrent_copilot_processes=max_concurrent,
     )
+    _emit_progress(
+        request,
+        status="completed" if not failed else "failed",
+        current_agent=None,
+        current_agent_index=total_agents,
+        total_agents=total_agents,
+        completed_agents=completed_agents,
+        pending_agents=[],
+    )
+    return result
 
 
 def parse_agent_response(raw: str, *, run_id: str, agent: str) -> AgentResult:
@@ -214,8 +249,13 @@ def _validate_payload(payload: dict) -> None:
 def _build_prompt(request: EngineRequest, agent: str, previous: list[AgentResult]) -> str:
     prompt_path = Path(__file__).resolve().parent.parent / "agents" / f"{agent}.md"
     prompt = prompt_path.read_text(encoding="utf-8")
+    payload = _build_payload(request, agent, previous)
+    return prompt + "\n\nJSONで回答してください。\nPAYLOAD_JSON\n" + json.dumps(payload, ensure_ascii=False)
+
+
+def _build_payload(request: EngineRequest, agent: str, previous: list[AgentResult]) -> dict:
     previous_summary = [asdict(item) for item in previous[-2:]]
-    payload = {
+    return {
         "run_id": request.run_id,
         "agent": agent,
         "target": request.target,
@@ -227,7 +267,11 @@ def _build_prompt(request: EngineRequest, agent: str, previous: list[AgentResult
         "previous_results": previous_summary,
         "diff": request.diff.diff_text,
     }
-    return prompt + "\n\nJSONで回答してください。\nPAYLOAD_JSON\n" + json.dumps(payload, ensure_ascii=False)
+
+
+def _emit_progress(request: EngineRequest, **payload) -> None:
+    if request.progress_callback is not None:
+        request.progress_callback({"run_id": request.run_id, **payload})
 
 
 def _failed_result(run_id: str, agent: str, reason: str) -> AgentResult:

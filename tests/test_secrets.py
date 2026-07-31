@@ -8,7 +8,7 @@ from ai_review.diff_collector import collect_diff
 from ai_review.quality import QualityCheckResult
 from ai_review.repository import resolve_repository
 from ai_review.review_engine import EngineRequest, run_review_engine
-from ai_review.secrets import scan_diff_for_secrets
+from ai_review.secrets import scan_diff_for_secrets, scan_payload
 
 
 class FakeClient:
@@ -94,7 +94,12 @@ def test_test_fixture_is_non_blocking_but_real_pem_blocks() -> None:
     )
     real = replace(
         fixture,
-        diff_text="+++ b/app.py\n+CERT = '''-----BEGIN PRIVATE KEY-----\\nabc\\n-----END PRIVATE KEY-----'''\n",
+        diff_text=(
+            "+++ b/app.py\n"
+            "+CERT = '''-----BEGIN PRIVATE KEY-----\n"
+            "+QUJDREVGR0hJSg==\n"
+            "+-----END PRIVATE KEY-----'''\n"
+        ),
     )
 
     assert scan_diff_for_secrets(fixture).blocked is False
@@ -117,3 +122,59 @@ def test_secret_value_is_not_stored() -> None:
 
     assert "ghp_" not in repr(finding)
     assert finding.fingerprint
+
+
+def test_payload_scan_excludes_raw_diff_but_scans_other_fields() -> None:
+    payload = {
+        "diff": "+API_KEY=sk_live_12345678901234567890",
+        "secret_findings": [{"message": "ghp_123456789012345678901234567890123456"}],
+        "quality_checks": [
+            {"stderr": "Authorization: Bearer abcdefghijklmnopqrstuvwxyz123456"}
+        ],
+    }
+
+    result = scan_payload(payload)
+
+    assert len(result.findings) == 1
+    assert result.findings[0].category == "bearer_token"
+    assert result.findings[0].source == "payload:quality_checks.0.stderr"
+
+
+def test_private_key_end_marker_must_match_category() -> None:
+    from ai_review.diff_collector import DiffSummary
+
+    summary = DiffSummary(
+        target="uncommitted",
+        changed_files=[],
+        diff_text=(
+            "+++ b/app.py\n"
+            "+KEY = '''-----BEGIN PRIVATE KEY-----\n"
+            "+QUJDREVGR0g=\n"
+            "+-----END CERTIFICATE-----'''\n"
+        ),
+        changed_file_count=1,
+        diff_line_count=3,
+        truncated=False,
+    )
+
+    assert scan_diff_for_secrets(summary).blocked is False
+
+
+def test_private_key_real_base64_block_is_confirmed() -> None:
+    from ai_review.diff_collector import DiffSummary
+
+    summary = DiffSummary(
+        target="uncommitted",
+        changed_files=[],
+        diff_text=(
+            "+++ b/app.py\n"
+            "+KEY = '''-----BEGIN PRIVATE KEY-----\n"
+            "+QUJDREVGR0hJSg==\n"
+            "+-----END PRIVATE KEY-----'''\n"
+        ),
+        changed_file_count=1,
+        diff_line_count=3,
+        truncated=False,
+    )
+
+    assert scan_diff_for_secrets(summary).blocked is True
