@@ -18,7 +18,7 @@ def test_help_succeeds(capsys: pytest.CaptureFixture[str]) -> None:
 
 
 def test_review_is_explicitly_not_implemented(capsys: pytest.CaptureFixture[str]) -> None:
-    result = cli.main(["review", "--repo", ".", "--target", "base"])
+    result = cli.main(["show-latest", "--repo", "."])
     captured = capsys.readouterr()
     assert result == 4
     assert "後続Issueで実装" in captured.err
