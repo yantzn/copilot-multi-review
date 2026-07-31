@@ -13,6 +13,7 @@ from .copilot import (
 from .diff_collector import DiffCollectionError, collect_diff
 from .quality import UnsafeCommandError, run_quality_checks
 from .repository import RepositoryError, resolve_repository
+from .review_engine import EngineRequest, ReviewEngineError, new_run_id, run_review_engine
 
 
 class CommandNotImplementedError(RuntimeError):
@@ -38,6 +39,18 @@ def build_parser() -> argparse.ArgumentParser:
     review.add_argument("--file", help="--target fileで使うリポジトリ内ファイル")
     review.add_argument("--exclude", action="append", default=[], help="除外するリポジトリ相対パスprefix")
     review.add_argument("--quality-command", action="append", help="allowlist済み品質チェックコマンド")
+    review.add_argument("--agent", choices=[
+        "requirements",
+        "correctness",
+        "security",
+        "testing",
+        "maintainability",
+        "performance",
+        "operations",
+        "devil_advocate",
+        "final",
+    ], help="単独実行するエージェント")
+    review.add_argument("--no-agents", action="store_true", help="Copilotエージェントを起動せず収集結果だけ表示します")
     review.add_argument(
         "--target",
         required=True,
@@ -91,7 +104,21 @@ def handle_review(args: argparse.Namespace) -> int:
     print("Quality checks:")
     for result in quality:
         print(f"- {result.name or '(none)'}: {result.status}")
-    print("レビューエンジン実行は後続Issueで実装します。Copilot CLIは呼び出していません。")
+    if args.no_agents:
+        print("エージェント実行は--no-agentsによりスキップしました。Copilot CLIは呼び出していません。")
+        return 0
+    engine_result = run_review_engine(
+        EngineRequest(
+            repository=repository,
+            diff=diff,
+            quality_checks=quality,
+            target=args.target,
+            run_id=new_run_id(),
+            agent=args.agent,
+        )
+    )
+    print(f"Final decision: {engine_result.final_decision}")
+    print(f"Max concurrent Copilot processes: {engine_result.max_concurrent_copilot_processes}")
     return 0
 
 
@@ -128,6 +155,9 @@ def main(argv: list[str] | None = None) -> int:
     except (DiffCollectionError, UnsafeCommandError) as exc:
         print(str(exc), file=sys.stderr)
         return 6
+    except ReviewEngineError as exc:
+        print(str(exc), file=sys.stderr)
+        return 7
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         return 1

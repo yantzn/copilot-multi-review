@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AgentResult",
+  "type": "object",
+  "required": ["run_id", "agent", "provider", "schema_version", "decision", "findings", "summary"],
+  "properties": {
+    "run_id": { "type": "string" },
+    "agent": { "type": "string" },
+    "provider": { "const": "github-copilot-cli" },
+    "schema_version": { "type": "string" },
+    "decision": {
+      "enum": ["APPROVE", "APPROVE_WITH_NOTES", "CHANGES_REQUIRED", "BLOCKED", "INCONCLUSIVE"]
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "message"],
+        "properties": {
+          "severity": { "enum": ["Critical", "Major", "Minor", "Info"] },
+          "message": { "type": "string" },
+          "file": { "type": ["string", "null"] },
+          "line": { "type": ["integer", "null"] }
+        }
+      }
+    },
+    "summary": { "type": "string" }
+  }
+}
