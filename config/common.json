@@ -1,0 +1,20 @@
+{
+  "schema_version": "0.1.0",
+  "provider": "github-copilot-cli",
+  "agents": [
+    "requirements",
+    "correctness",
+    "security",
+    "testing",
+    "maintainability",
+    "performance",
+    "operations",
+    "devil_advocate",
+    "final"
+  ],
+  "max_concurrent_copilot_processes": 1,
+  "output": {
+    "reports_dir": "reports",
+    "runtime_dir": "runtime"
+  }
+}
