@@ -147,6 +147,8 @@ Cancellation stops only the current Copilot child process, prevents later batche
 
 Cancelled and failed are separate states. A cancelled run keeps the final review decision `INCONCLUSIVE` and records cancelled batches separately from failed batches.
 
+During an in-flight cancel, status can temporarily show `cancelling`. After the current Copilot child process is stopped, status becomes `cancelled`. Windows stops the exact target PID tree; POSIX stops only the process group started for the Copilot invocation.
+
 VS Code includes quick, standard, and deep audit launch configurations. The flow is unchanged: press run, select the target Git repository, review the preflight summary, then choose whether to execute. Copilot is not called before confirmation.
 
 Audit reports are under `reports/<project-id>/history/<run-id>/` with `run.json`, `final.json`, `repository-summary.json`, `coverage.json`, `batches/`, `agents/`, and `report.md`. `latest/` is updated with the final result. Inspect `coverage.json` first when the final result is `INCONCLUSIVE` or `BLOCKED`.
@@ -159,7 +161,9 @@ Audit reports are under `reports/<project-id>/history/<run-id>/` with `run.json`
 ai-review audit --repo <path> --no-agents
 ```
 
-It stores repository analysis, batch planning, expected Copilot calls, and initial coverage without running Copilot. The CLI exits with 0 and records `execution_mode: analysis_only` and `review_completed: false`.
+It stores repository analysis, batch planning, expected Copilot calls, and initial coverage without running Copilot. Expected Copilot calls are `0`, so `--max-copilot-calls 0` is valid. The CLI exits with 0 and records `execution_mode: analysis_only` and `review_completed: false`.
+
+If a normal audit has no reviewable files or segments, Copilot is not called and the result is `INCONCLUSIVE` with `no_reviewable_files: true`. A secret-only repository is `BLOCKED`, because confirmed secrets take precedence over the no-reviewable-files rule.
 
 Audit CLI exit codes:
 

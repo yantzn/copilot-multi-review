@@ -33,6 +33,13 @@ Environment:
 | Repository audit cancelled vs failed | Passed | automated tests keep cancelled batches out of failed batches |
 | Repository audit Copilot error classification | Passed | authentication/rate limit/timeout/schema/process/network/cancel/unexpected mappings tested |
 | Repository audit status watch suppression | Passed | automated CLI test prints unchanged status only once |
+| Secret file substring exceptions removed | Passed | `tests/production.pem`, `examples/real-private.key`, `contest/.env`, and `documentation-backup/prod.p12` block |
+| Batch final payload secret scan | Passed | previous batch result token blocks the next agent before another Copilot call |
+| Cross final payload secret scan | Passed | previous cross result token blocks later cross agents |
+| In-flight Copilot cancel | Passed | Popen-based test cancels a running child process before timeout |
+| Analysis-only expected calls zero | Passed | `--no-agents` with `max_copilot_calls=0` succeeds |
+| No reviewable files | Passed | empty and binary-only repositories return INCONCLUSIVE without Copilot calls |
+| Safe error messages | Passed | token, DB URL, PEM, password, and multiline exception text are not stored in error messages |
 
 Residual manual checks:
 

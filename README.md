@@ -203,16 +203,22 @@ ai-review status --repo <path> --watch
 
 `coverage.json` はファイル単位の集約statusに加えて、複数segmentの詳細を持ちます。segmentには `batch_id`、`start_line`、`end_line`、`status`、`executed_agents`、`reason` が保存されます。ファイル単位statusは安全側で集約され、`blocked`、`failed`、`cancelled`、`unreviewed`、`skipped` が `reviewed` より優先されます。
 
-`.env`、`.env.*`、`*.key`、`*.pem`、`*.p12` などの秘密ファイルがGit管理対象または明示対象に含まれる場合、既定では全体を `BLOCKED` とし、Copilot呼び出し回数は0になります。fixture、検出器定義、ドキュメントサンプルは文脈に応じて非ブロッキングに分類しますが、実Tokenや実PEMはブロックします。
+`.env`、`.env.*`、`*.key`、`*.pem`、`*.p12` などの秘密ファイルがGit管理対象または明示対象に含まれる場合、既定では全体を `BLOCKED` とし、Copilot呼び出し回数は0になります。MVPではパスのsubstringによるfixture/sample/docs判定は行いません。公開サンプルを許可する場合は、将来、共通設定の明示allowlistと内容検査を組み合わせて追加します。
 
 `--no-agents` は失敗ではなく `analysis_only` です。対象ファイル、除外理由、batch計画、想定Copilot呼び出し数、初期coverageを保存し、レビュー判定は未実施として扱います。
 
 batch状態は `pending`、`running`、`completed`、`failed`、`blocked`、`cancelled`、`skipped` を分離して記録します。cancelはfailedへ混ぜず、完了済み結果を保持し、後続batchは起動しません。Copilot例外は `authentication`、`rate_limit`、`timeout`、`schema_validation`、`cancelled`、`process_start`、`network`、`unexpected` に分類し、完全promptや秘密値は保存しません。
+
+batch/crossとも、Copilotへ実際に送る最終payloadを送信直前にシークレット検査します。前段agent resultのsummary/findingやcross resultに秘密候補が混入した場合、現在agentと後続agentは起動せず `BLOCKED` で終了します。
+
+実行中cancelは現在のCopilot子プロセスだけを停止します。Windowsでは対象PIDへ `taskkill /PID <pid> /T` を使い、POSIXでは起動したprocess groupのみをterminate/killします。無関係なプロセス名指定killは使いません。runtimeは停止中に `cancelling`、停止完了後に `cancelled` を記録します。
 
 `status --watch` は状態が変化した場合だけ再出力し、長時間監査で同じ内容を大量追記しないようにしています。
 
 deep profileでは各バッチに8専門エージェントを実行し、`final`は全バッチ結果を統合する横断フェーズで1回だけ実行します。
 
 CLI終了コードは、`APPROVE` / `APPROVE_WITH_NOTES` / `analysis_only` が0、`CHANGES_REQUIRED`が1、`BLOCKED`が2、`INCONCLUSIVE`が3、cancelが4です。実行前の監査エラーは既存のCLIエラー体系で10を返します。
+
+レビュー可能segmentが0件の通常監査はCopilotを呼ばず `INCONCLUSIVE` になります。analysis-onlyでは正常終了し、想定Copilot呼び出し数も0です。
 
 監査上限の優先順位は、CLI明示値、`--rerun`保存値、`config/common.json`、コード上の最終fallbackです。

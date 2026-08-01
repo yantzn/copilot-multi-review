@@ -274,6 +274,9 @@ def save_repository_audit_result(paths: RootPaths, repository: RepositoryContext
         "current_branch": repository.current_branch,
         "profile": audit_result.profile,
         "target_file_count": len(analysis.target_files),
+        "reviewable_file_count": sum(1 for item in audit_result.coverage if item.status not in {"excluded", "blocked", "skipped"}),
+        "reviewable_segment_count": sum(len(item.segments) for item in audit_result.coverage if item.status not in {"excluded", "blocked", "skipped"}),
+        "no_reviewable_files": audit_result.no_reviewable_files,
         "reviewed_file_count": sum(1 for item in audit_result.coverage if item.status == "reviewed"),
         "excluded_file_count": sum(1 for item in audit_result.coverage if item.status == "excluded"),
         "skipped_file_count": sum(1 for item in audit_result.coverage if item.status == "skipped"),
@@ -317,6 +320,9 @@ def save_repository_audit_result(paths: RootPaths, repository: RepositoryContext
         "decision": audit_result.final_decision,
         "max_concurrent_copilot_processes": audit_result.max_active_calls,
         "blocked_batches": audit_result.blocked_batches,
+        "blocked_phase": audit_result.blocked_phase,
+        "blocked_agent": audit_result.blocked_agent,
+        "blocked_source": audit_result.blocked_source,
         "failed_batches": audit_result.failed_batches,
         "cancelled_batches": audit_result.cancelled_batches,
         "skipped_batches": audit_result.skipped_batches,
@@ -324,6 +330,7 @@ def save_repository_audit_result(paths: RootPaths, repository: RepositoryContext
         "unreviewed_files": audit_result.unreviewed_files,
         "execution_mode": audit_result.execution_mode,
         "review_completed": audit_result.review_completed,
+        "no_reviewable_files": audit_result.no_reviewable_files,
         "errors": [asdict(item) for item in audit_result.errors],
     }
     coverage_json = [asdict(item) for item in audit_result.coverage]
@@ -430,12 +437,19 @@ def _render_audit_report(summary: dict, final_json: dict) -> str:
             f"- profile: {summary['profile']}",
             f"- decision: {final_json['decision']}",
             f"- target files: {summary['target_file_count']}",
+            f"- reviewable files: {summary.get('reviewable_file_count', 0)}",
+            f"- reviewable segments: {summary.get('reviewable_segment_count', 0)}",
             f"- reviewed files: {summary['reviewed_file_count']}",
             f"- excluded files: {summary['excluded_file_count']}",
             f"- total batches: {summary['total_batches']}",
             f"- failed batches: {summary['failed_batches']}",
             f"- blocked batches: {summary['blocked_batches']}",
             f"- copilot calls: {summary['copilot_call_count']}",
+            *(
+                ["", "レビュー可能な対象ファイルがありません。"]
+                if summary.get("no_reviewable_files")
+                else []
+            ),
             "",
         ]
     )

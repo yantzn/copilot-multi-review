@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 import json
 import subprocess
+import sys
+import time
 
 import pytest
 
@@ -19,6 +21,7 @@ from ai_review.review_engine import (
     parse_agent_response,
     run_review_engine,
 )
+from ai_review.copilot import CopilotCommand
 
 
 class FakeClient(CopilotClient):
@@ -26,7 +29,7 @@ class FakeClient(CopilotClient):
         self.calls: list[str] = []
         self.decisions = decisions or []
 
-    def run_prompt(self, prompt: str, *, timeout_seconds: int) -> str:
+    def run_prompt(self, prompt: str, *, timeout_seconds: int, cancel_requested=None) -> str:
         payload = json.loads(prompt.split("PAYLOAD_JSON\n", 1)[1].splitlines()[0])
         self.calls.append(payload["agent"])
         decision = self.decisions.pop(0) if self.decisions else "APPROVE"
@@ -144,7 +147,7 @@ def test_major_finding_forces_changes_required(tmp_path: Path) -> None:
     repo = init_repo(tmp_path / "repo")
 
     class MajorClient(FakeClient):
-        def run_prompt(self, prompt: str, *, timeout_seconds: int) -> str:
+        def run_prompt(self, prompt: str, *, timeout_seconds: int, cancel_requested=None) -> str:
             payload = json.loads(prompt.split("PAYLOAD_JSON\n", 1)[1].splitlines()[0])
             self.calls.append(payload["agent"])
             return json.dumps(
@@ -168,7 +171,7 @@ def test_schema_mismatch_retries_safely(tmp_path: Path) -> None:
     repo = init_repo(tmp_path / "repo")
 
     class RetryClient(FakeClient):
-        def run_prompt(self, prompt: str, *, timeout_seconds: int) -> str:
+        def run_prompt(self, prompt: str, *, timeout_seconds: int, cancel_requested=None) -> str:
             if not self.calls:
                 self.calls.append("bad")
                 return "{}"
@@ -185,7 +188,7 @@ def test_timeout_marks_agent_failed(tmp_path: Path) -> None:
     repo = init_repo(tmp_path / "repo")
 
     class TimeoutClient(FakeClient):
-        def run_prompt(self, prompt: str, *, timeout_seconds: int) -> str:
+        def run_prompt(self, prompt: str, *, timeout_seconds: int, cancel_requested=None) -> str:
             raise subprocess.TimeoutExpired(cmd="copilot", timeout=1)
 
     result = run_review_engine(request_for(repo, agent="security"), TimeoutClient())
@@ -216,10 +219,32 @@ def test_rate_limit_or_auth_failure_marks_failed(tmp_path: Path) -> None:
     repo = init_repo(tmp_path / "repo")
 
     class FailingClient(FakeClient):
-        def run_prompt(self, prompt: str, *, timeout_seconds: int) -> str:
+        def run_prompt(self, prompt: str, *, timeout_seconds: int, cancel_requested=None) -> str:
             raise ReviewEngineError("Copilot CLI rate limit")
 
     result = run_review_engine(request_for(repo, agent="security"), FailingClient())
 
     assert result.agent_states["security"] == "failed"
     assert result.final_decision == "INCONCLUSIVE"
+
+
+def test_copilot_client_normal_completion(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "ai_review.review_engine.resolve_copilot_command",
+        lambda _args: CopilotCommand(sys.executable, [sys.executable, "-c", "import sys; sys.stdin.read(); print('ok')"]),
+    )
+
+    assert CopilotClient().run_prompt("hello", timeout_seconds=5).strip() == "ok"
+
+
+def test_copilot_client_cancels_running_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "ai_review.review_engine.resolve_copilot_command",
+        lambda _args: CopilotCommand(sys.executable, [sys.executable, "-c", "import sys,time; sys.stdin.read(); time.sleep(10)"]),
+    )
+    started = time.monotonic()
+
+    with pytest.raises(AgentCancelledError):
+        CopilotClient().run_prompt("hello", timeout_seconds=30, cancel_requested=lambda: time.monotonic() - started > 0.5)
+
+    assert time.monotonic() - started < 10

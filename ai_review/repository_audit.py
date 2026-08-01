@@ -12,7 +12,7 @@ from .agents import AgentResult, Finding, rule_based_decision
 from .diff_collector import DEFAULT_EXCLUDES
 from .processes import decode_output, run_command
 from .repository import RepositoryContext
-from .review_engine import CopilotClient, parse_agent_response
+from .review_engine import AgentCancelledError, CopilotClient, parse_agent_response
 from .secrets import scan_payload
 
 
@@ -46,7 +46,6 @@ AUDIT_DEFAULTS = {
 }
 
 SECRET_FILE_PATTERNS = (".env", ".env.", ".pem", ".key", ".p12")
-SECRET_SAMPLE_HINTS = ("fixture", "fixtures", "test", "tests", "sample", "example", "docs", "documentation")
 BINARY_EXTENSIONS = {
     ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".pdf", ".zip", ".gz", ".tar", ".mp4", ".mov", ".avi",
     ".exe", ".dll", ".bin", ".sqlite", ".db", ".wasm",
@@ -204,6 +203,10 @@ class AuditResult:
     execution_mode: str
     review_completed: bool
     errors: list[CopilotErrorInfo] = field(default_factory=list)
+    no_reviewable_files: bool = False
+    blocked_phase: str | None = None
+    blocked_agent: str | None = None
+    blocked_source: str | None = None
 
 
 def validate_profile(profile: str) -> None:
@@ -235,7 +238,7 @@ def analyze_repository(repository: RepositoryContext, options: AuditOptions) -> 
 
     batches, skipped = split_batches_with_coverage(files, options)
     coverage.extend(skipped)
-    expected_copilot_calls = sum(len(batch.agents) for batch in batches) + (0 if options.no_agents else len(PROFILE_AGENTS[options.profile]["cross"]))
+    expected_copilot_calls = 0 if options.no_agents else sum(len(batch.agents) for batch in batches) + len(PROFILE_AGENTS[options.profile]["cross"])
     if len(batches) > options.max_batches:
         raise AuditError(f"バッチ数が上限を超えています: {len(batches)} > {options.max_batches}")
     if expected_copilot_calls > options.max_copilot_calls:
@@ -341,28 +344,31 @@ def run_repository_audit(
     skipped_batches: list[str] = []
     errors: list[CopilotErrorInfo] = []
     pending_batches = [batch.batch_id for batch in batches]
+    blocked_phase: str | None = None
+    blocked_agent: str | None = None
+    blocked_source: str | None = None
+    no_reviewable_files = len(batches) == 0 or sum(len(batch.files) for batch in batches) == 0
 
     if any(item.status == "blocked" for item in coverage):
         return analysis, _audit_result(
             run_id, options, batches, coverage, batch_results, cross_results, "BLOCKED", copilot_call_count,
             max_active_calls, started, True, failed_batches, blocked_batches, cancelled_batches, skipped_batches,
-            completed_batches, errors,
+            completed_batches, errors, no_reviewable_files=False, blocked_phase="preflight", blocked_source="confirmed_secret_file",
         )
 
     for batch in batches:
-        if _batch_has_blocked_coverage(coverage, batch):
-            coverage = _mark_coverage(coverage, batch, "blocked", [], "confirmed_secret_file")
-            continue
-        scan = scan_payload(_batch_payload(repository, analysis, batch))
+        scan = scan_payload(build_agent_payload(_batch_payload(repository, analysis, batch), []))
         if scan.blocked:
             blocked_batches.append(batch.batch_id)
             coverage = _mark_coverage(coverage, batch, "blocked", [], "confirmed_secret")
+            blocked_phase = "batch"
+            blocked_source = "preflight_payload"
     blocked_batches = _unique(blocked_batches)
     if blocked_batches:
         return analysis, _audit_result(
             run_id, options, batches, coverage, batch_results, cross_results, "BLOCKED", copilot_call_count,
             max_active_calls, started, True, failed_batches, blocked_batches, cancelled_batches, skipped_batches,
-            completed_batches, errors,
+            completed_batches, errors, no_reviewable_files=False, blocked_phase=blocked_phase, blocked_source=blocked_source,
         )
 
     if options.no_agents:
@@ -370,6 +376,14 @@ def run_repository_audit(
         return analysis, _audit_result(
             run_id, options, batches, coverage, batch_results, cross_results, "ANALYSIS_ONLY", 0, 0, started, False,
             failed_batches, blocked_batches, cancelled_batches, skipped_batches, completed_batches, errors,
+            no_reviewable_files=no_reviewable_files,
+        )
+
+    if no_reviewable_files:
+        return analysis, _audit_result(
+            run_id, options, batches, coverage, batch_results, cross_results, "INCONCLUSIVE", 0, 0, started, False,
+            failed_batches, blocked_batches, cancelled_batches, skipped_batches, completed_batches, errors,
+            no_reviewable_files=True,
         )
 
     _emit(progress_callback, **_progress_payload(options, "running", batches, None, pending_batches, completed_batches, failed_batches, blocked_batches, cancelled_batches, skipped_batches))
@@ -399,12 +413,63 @@ def run_repository_audit(
                     agent_index=agent_index, completed_agents=[r.agent for r in batch_results[batch.batch_id]],
                 ),
             )
+            base_payload = _batch_payload(repository, analysis, batch)
+            agent_payload = build_agent_payload(base_payload, batch_results[batch.batch_id])
+            scan = scan_payload(agent_payload)
+            if scan.blocked:
+                blocked_batches.append(batch.batch_id)
+                coverage = _mark_coverage(coverage, batch, "blocked", [r.agent for r in batch_results[batch.batch_id]], "agent_payload_secret")
+                blocked_phase = "batch"
+                blocked_agent = agent
+                blocked_source = "agent_payload"
+                batch_failed = True
+                break
             active_calls += 1
             max_active_calls = max(max_active_calls, active_calls)
+            cancel_notified = False
+
+            def cancel_requested() -> bool:
+                nonlocal cancel_notified
+                if not _cancelled(cancel_file):
+                    return False
+                if not cancel_notified:
+                    _emit(
+                        progress_callback,
+                        **_progress_payload(
+                            options, "cancelling", batches, batch, pending_batches, completed_batches, failed_batches,
+                            blocked_batches, cancelled_batches, skipped_batches, batch_index=batch_index, agent=agent,
+                            agent_index=agent_index, completed_agents=[r.agent for r in batch_results[batch.batch_id]],
+                        ),
+                        cancel_requested_at=time.time(),
+                    )
+                    cancel_notified = True
+                return True
+
             try:
-                raw = client.run_prompt(_prompt(agent, _batch_payload(repository, analysis, batch), batch_results[batch.batch_id]), timeout_seconds=120)
-                batch_results[batch.batch_id].append(parse_agent_response(raw, run_id=run_id, agent=agent))
+                raw = client.run_prompt(_prompt(agent, agent_payload), timeout_seconds=120, cancel_requested=cancel_requested)
                 copilot_call_count += 1
+                parsed = parse_agent_response(raw, run_id=run_id, agent=agent)
+                result_scan = scan_payload(asdict(parsed))
+                if result_scan.blocked:
+                    blocked_batches.append(batch.batch_id)
+                    coverage = _mark_coverage(coverage, batch, "blocked", [r.agent for r in batch_results[batch.batch_id]], "agent_result_secret")
+                    blocked_phase = "batch"
+                    blocked_agent = agent
+                    blocked_source = "agent_result"
+                    batch_failed = True
+                    break
+                batch_results[batch.batch_id].append(parsed)
+            except AgentCancelledError as exc:
+                info = _classify_copilot_exception(exc, agent=agent, batch_id=batch.batch_id)
+                errors.append(info)
+                cancelled_batches.append(batch.batch_id)
+                coverage = _mark_coverage(coverage, batch, "cancelled", [r.agent for r in batch_results[batch.batch_id]], "cancelled")
+                batch_cancelled = True
+                print("[ai-review] キャンセル要求を受け付けました。")
+                print("[ai-review] 実行中のCopilotプロセスを停止しています...")
+                print(f"[ai-review] {batch.batch_id} / {agent} をキャンセルしました。")
+                print("[ai-review] 後続バッチは実行しません。")
+                break
             except Exception as exc:  # noqa: BLE001 - stored as sanitized audit error.
                 info = _classify_copilot_exception(exc, agent=agent, batch_id=batch.batch_id)
                 errors.append(info)
@@ -415,6 +480,8 @@ def run_repository_audit(
                 break
             finally:
                 active_calls -= 1
+        if blocked_phase == "batch":
+            break
         if batch_cancelled or batch_failed:
             break
         if batch.batch_id not in completed_batches:
@@ -428,6 +495,13 @@ def run_repository_audit(
                 skipped_batches.append(batch.batch_id)
                 coverage = _mark_coverage(coverage, batch, "skipped", [], "cancelled_before_start")
 
+    if blocked_batches and blocked_phase == "batch":
+        started_batch_ids = set(completed_batches + blocked_batches)
+        for batch in batches:
+            if batch.batch_id not in started_batch_ids:
+                skipped_batches.append(batch.batch_id)
+                coverage = _mark_coverage(coverage, batch, "skipped", [], "blocked_before_start")
+
     if not failed_batches and not blocked_batches and not cancelled_batches:
         cross_payload = _cross_payload(repository, analysis, batch_results, coverage)
         for index, agent in enumerate(PROFILE_AGENTS[options.profile]["cross"], start=1):
@@ -435,12 +509,43 @@ def run_repository_audit(
                 cancelled_batches.append("cross")
                 break
             _emit(progress_callback, current_agent=agent, current_agent_index=index, current_batch_total_agents=len(PROFILE_AGENTS[options.profile]["cross"]))
+            agent_payload = build_agent_payload(cross_payload, cross_results)
+            scan = scan_payload(agent_payload)
+            if scan.blocked:
+                blocked_batches.append("cross")
+                blocked_phase = "cross"
+                blocked_agent = agent
+                blocked_source = "agent_payload"
+                break
             active_calls += 1
             max_active_calls = max(max_active_calls, active_calls)
+            cancel_notified = False
+
+            def cross_cancel_requested() -> bool:
+                nonlocal cancel_notified
+                if not _cancelled(cancel_file):
+                    return False
+                if not cancel_notified:
+                    _emit(progress_callback, status="cancelling", current_agent=agent, current_agent_index=index, current_batch_total_agents=len(PROFILE_AGENTS[options.profile]["cross"]), cancel_requested_at=time.time())
+                    cancel_notified = True
+                return True
+
             try:
-                raw = client.run_prompt(_prompt(agent, cross_payload, cross_results), timeout_seconds=120)
-                cross_results.append(parse_agent_response(raw, run_id=run_id, agent=agent))
+                raw = client.run_prompt(_prompt(agent, agent_payload), timeout_seconds=120, cancel_requested=cross_cancel_requested)
                 copilot_call_count += 1
+                parsed = parse_agent_response(raw, run_id=run_id, agent=agent)
+                if scan_payload(asdict(parsed)).blocked:
+                    blocked_batches.append("cross")
+                    blocked_phase = "cross"
+                    blocked_agent = agent
+                    blocked_source = "agent_result"
+                    break
+                cross_results.append(parsed)
+            except AgentCancelledError as exc:
+                info = _classify_copilot_exception(exc, agent=agent, batch_id="cross")
+                errors.append(info)
+                cancelled_batches.append("cross")
+                break
             except Exception as exc:  # noqa: BLE001
                 info = _classify_copilot_exception(exc, agent=agent, batch_id="cross")
                 errors.append(info)
@@ -456,7 +561,8 @@ def run_repository_audit(
     return analysis, _audit_result(
         run_id, options, batches, coverage, batch_results, cross_results, decision, copilot_call_count, max_active_calls,
         started, bool(blocked_batches), failed_batches, blocked_batches, cancelled_batches, skipped_batches,
-        completed_batches, errors,
+        completed_batches, errors, no_reviewable_files=no_reviewable_files, blocked_phase=blocked_phase,
+        blocked_agent=blocked_agent, blocked_source=blocked_source,
     )
 
 
@@ -539,8 +645,6 @@ def _exclude_reason(path: str) -> str | None:
         return "coverage"
     name = PurePosixPath(path).name.lower()
     if name == ".env" or name.startswith(".env.") or name.endswith((".key", ".pem", ".p12")):
-        if any(hint in lowered for hint in SECRET_SAMPLE_HINTS):
-            return "secret_sample_excluded"
         return "confirmed_secret_file"
     suffix = PurePosixPath(path).suffix.lower()
     if suffix in BINARY_EXTENSIONS:
@@ -703,8 +807,12 @@ def _cross_payload(repository: RepositoryContext, analysis: RepositoryAnalysis, 
     }
 
 
-def _prompt(agent: str, payload: dict, previous: list[AgentResult]) -> str:
-    return f"Repository audit agent: {agent}\nReturn JSON only.\nPAYLOAD_JSON\n" + json.dumps(payload | {"previous_results": [asdict(item) for item in previous[-2:]]}, ensure_ascii=False)
+def build_agent_payload(base_payload: dict, previous: list[AgentResult]) -> dict:
+    return base_payload | {"previous_results": [asdict(item) for item in previous[-2:]]}
+
+
+def _prompt(agent: str, payload: dict) -> str:
+    return f"Repository audit agent: {agent}\nReturn JSON only.\nPAYLOAD_JSON\n" + json.dumps(payload, ensure_ascii=False)
 
 
 def _mark_coverage(coverage: list[CoverageEntry], batch: AuditBatch, status: str, agents: list[str], reason: str | None) -> list[CoverageEntry]:
@@ -797,6 +905,11 @@ def _audit_result(
     skipped_batches: list[str],
     completed_batches: list[str],
     errors: list[CopilotErrorInfo],
+    *,
+    no_reviewable_files: bool = False,
+    blocked_phase: str | None = None,
+    blocked_agent: str | None = None,
+    blocked_source: str | None = None,
 ) -> AuditResult:
     execution_mode = "analysis_only" if options.no_agents else "review"
     review_completed = execution_mode == "review" and not (failed_batches or blocked_batches or cancelled_batches) and not any(item.status in {"unreviewed", "skipped", "failed", "blocked", "cancelled"} for item in coverage)
@@ -821,6 +934,10 @@ def _audit_result(
         execution_mode=execution_mode,
         review_completed=review_completed,
         errors=errors,
+        no_reviewable_files=no_reviewable_files,
+        blocked_phase=blocked_phase,
+        blocked_agent=blocked_agent,
+        blocked_source=blocked_source,
     )
 
 
@@ -847,12 +964,20 @@ def _classify_copilot_exception(exc: Exception, *, agent: str, batch_id: str) ->
         kind, retryable = "network", True
     else:
         kind, retryable = "unexpected", False
-    return CopilotErrorInfo(kind, agent, batch_id, _safe_error_message(exc), retryable, time.time())
+    return CopilotErrorInfo(kind, agent, batch_id, _safe_error_message(kind), retryable, time.time())
 
 
-def _safe_error_message(exc: Exception) -> str:
-    message = str(exc).replace("\n", " ").strip()
-    return message[:200] or type(exc).__name__
+def _safe_error_message(kind: str) -> str:
+    return {
+        "authentication": "Copilot authentication failed",
+        "rate_limit": "Copilot rate limit reached",
+        "timeout": "Copilot execution timed out",
+        "schema_validation": "Copilot response schema validation failed",
+        "cancelled": "Copilot execution was cancelled",
+        "process_start": "Copilot process could not be started",
+        "network": "Copilot network error",
+        "unexpected": "Unexpected Copilot execution error",
+    }.get(kind, "Unexpected Copilot execution error")
 
 
 def _terminal_progress(batch_index: int, total_batches: int, batch: AuditBatch, agent_index: int, total_agents: int, agent: str, completed_batches: int, failed_batches: int, unreviewed: int) -> None:

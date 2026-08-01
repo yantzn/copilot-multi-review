@@ -106,7 +106,7 @@ cancelは現在のrun IDだけを対象にし、広範囲なプロセスkillは�
 
 confirmed secretが1件でもある場合、リポジトリ全体監査は `BLOCKED` になり、Copilot呼び出し回数は0になります。`.env`、PEM、秘密鍵、token、DB接続文字列などはCopilotへ送信しません。検出器定義、テストfixture、ドキュメントサンプルは文脈に応じて非ブロッキング扱いしますが、実Tokenや実PEMはブロックします。
 
-`.env`、`.env.*`、`*.key`、`*.pem`、`*.p12` がGit管理対象または `--include-untracked` で明示対象に入る場合は、既定で `confirmed_secret_file` として全体を `BLOCKED` にします。公開証明書サンプルやfixtureの詳細な例外設定は将来拡張ですが、現状も `tests/fixtures`、`sample`、`example`、`docs` などの文脈では非ブロッキング除外として扱います。
+`.env`、`.env.*`、`*.key`、`*.pem`、`*.p12` がGit管理対象または `--include-untracked` で明示対象に入る場合は、既定で `confirmed_secret_file` として全体を `BLOCKED` にします。MVPでは `tests`、`sample`、`example`、`docs` などのパスsubstringだけで非ブロッキング化しません。
 
 ## analysis-onlyとINCONCLUSIVEの違い
 
@@ -123,6 +123,18 @@ Copilot例外やschema不一致などは `failed` です。ユーザーのcancel
 ## status --watchが更新されない
 
 `status --watch` は状態変化時だけ再出力します。同じ表示が続く場合は、重複出力を抑制している状態です。別ターミナルで `ai-review status --repo <path>` を一度だけ実行すると現在値を確認できます。
+
+## 横断統合でBLOCKEDになる
+
+batch resultやcross resultにtoken風文字列が含まれると、次のagentへ送る前の実payload検査で `BLOCKED` になります。これは前段agentの出力を再送信しないための保護です。レポートには `blocked_phase`、`blocked_agent`、`blocked_source` のような安全なmetadataだけを保存します。
+
+## レビュー可能ファイルがない
+
+空リポジトリ、binaryのみ、large fileのみ、既定除外のみの場合、通常監査はCopilotを呼ばず `INCONCLUSIVE` になります。`repository-summary.json` の `no_reviewable_files` と `reviewable_segment_count` を確認してください。
+
+## エラー詳細が見えない
+
+Copilot実行エラーは秘密値流出を避けるため定型文で保存します。stdout、stderr、prompt断片、stack trace全文はreportへ保存しません。
 
 ## Windowsで文字化けやBAT/CMD起動問題がある
 

@@ -18,6 +18,7 @@ from ai_review.repository_audit import (
     split_batches,
     validate_profile,
 )
+from ai_review.agents import AgentResult, Finding
 from ai_review.review_engine import CopilotClient
 from ai_review.storage import RootPaths, save_repository_audit_result
 
@@ -28,7 +29,7 @@ class CountingClient(CopilotClient):
         self.max_active_calls = 0
         self.calls: list[str] = []
 
-    def run_prompt(self, prompt: str, *, timeout_seconds: int) -> str:
+    def run_prompt(self, prompt: str, *, timeout_seconds: int, cancel_requested=None) -> str:
         agent = prompt.split("Repository audit agent: ", 1)[1].splitlines()[0]
         self.active_calls += 1
         self.max_active_calls = max(self.max_active_calls, self.active_calls)
@@ -52,9 +53,32 @@ class FailingClient(CountingClient):
         super().__init__()
         self.exc = exc
 
-    def run_prompt(self, prompt: str, *, timeout_seconds: int) -> str:
+    def run_prompt(self, prompt: str, *, timeout_seconds: int, cancel_requested=None) -> str:
         self.calls.append(prompt)
         raise self.exc
+
+
+class SecretResultClient(CountingClient):
+    def __init__(self, *, secret_on_call: int = 1, secret: str = "ghp_123456789012345678901234567890123456") -> None:
+        super().__init__()
+        self.secret_on_call = secret_on_call
+        self.secret = secret
+
+    def run_prompt(self, prompt: str, *, timeout_seconds: int, cancel_requested=None) -> str:
+        agent = prompt.split("Repository audit agent: ", 1)[1].splitlines()[0]
+        self.calls.append(agent)
+        summary = self.secret if len(self.calls) == self.secret_on_call else "ok"
+        return json.dumps(
+            {
+                "run_id": "run-1",
+                "agent": agent,
+                "provider": "github-copilot-cli",
+                "schema_version": "0.1.0",
+                "decision": "APPROVE",
+                "findings": [],
+                "summary": summary,
+            }
+        )
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -213,6 +237,60 @@ def test_secret_payload_blocks_copilot_zero_calls(tmp_path: Path) -> None:
     assert client.calls == []
 
 
+def test_batch_previous_result_secret_blocks_next_agent(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path / "repo")
+    client = SecretResultClient(secret_on_call=1)
+
+    _analysis, result = run_repository_audit(resolve_repository(str(repo)), AuditOptions(profile="quick"), run_id="run-1", client=client)
+
+    assert result.final_decision == "BLOCKED"
+    assert result.blocked_phase == "batch"
+    assert result.blocked_source == "agent_result"
+    assert result.copilot_call_count == 1
+    assert client.calls == ["correctness"]
+    assert result.batch_results == {"batch-001": []}
+
+
+def test_cross_previous_result_secret_blocks_next_cross_agent(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path / "repo")
+    batch_calls = 3 * len(PROFILE_AGENTS["standard"]["batch"])
+    client = SecretResultClient(secret_on_call=batch_calls + 1, secret="Bearer abcdefghijklmnopqrstuvwxyz123456")
+
+    _analysis, result = run_repository_audit(resolve_repository(str(repo)), AuditOptions(profile="standard"), run_id="run-1", client=client)
+
+    assert result.final_decision == "BLOCKED"
+    assert result.blocked_phase == "cross"
+    assert result.blocked_source == "agent_result"
+    assert result.blocked_batches == ["cross"]
+    assert result.copilot_call_count == batch_calls + 1
+    assert len(client.calls) == batch_calls + 1
+
+
+def test_cross_payload_coverage_secret_blocks_before_call(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path / "repo")
+    client = CountingClient()
+    analysis, batches = analyze_repository(resolve_repository(str(repo)), AuditOptions(profile="quick"))
+    secret_coverage = [
+        item if item.path != "src/app.py" else type(item)(
+            path=item.path,
+            status=item.status,
+            batch_id=item.batch_id,
+            executed_agents=item.executed_agents,
+            reason="postgres://user:password123456@localhost/db",
+            segments=item.segments,
+            tracked=item.tracked,
+            classification=item.classification,
+            category=item.category,
+        )
+        for item in analysis.coverage
+    ]
+    from ai_review.repository_audit import _cross_payload, build_agent_payload
+
+    payload = build_agent_payload(_cross_payload(resolve_repository(str(repo)), analysis, {}, secret_coverage), [])
+
+    assert __import__("ai_review.secrets", fromlist=["scan_payload"]).scan_payload(payload).blocked is True
+
+
 def test_secret_file_paths_block_without_sending_values(tmp_path: Path) -> None:
     repo = init_repo(tmp_path / "repo")
     for name in (".env", ".env.local", "deploy.key", "cert.pem", "cert.p12"):
@@ -229,19 +307,21 @@ def test_secret_file_paths_block_without_sending_values(tmp_path: Path) -> None:
     assert {".env", ".env.local", "deploy.key", "cert.pem", "cert.p12"} <= blocked
 
 
-def test_secret_fixture_file_is_non_blocking_sample(tmp_path: Path) -> None:
+def test_secret_file_substring_paths_are_still_blocked(tmp_path: Path) -> None:
     repo = init_repo(tmp_path / "repo")
-    fixture = repo / "tests" / "fixtures"
-    fixture.mkdir()
-    (fixture / "sample.pem").write_text("-----BEGIN CERTIFICATE-----\nSAMPLE\n-----END CERTIFICATE-----\n", encoding="utf-8")
-    git(repo, "add", "tests/fixtures/sample.pem")
-    git(repo, "commit", "-m", "fixture pem")
+    for name in ("tests/production.pem", "examples/real-private.key", "contest/.env", "documentation-backup/prod.p12"):
+        path = repo / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("SECRET_VALUE_SHOULD_NOT_APPEAR\n", encoding="utf-8")
+        git(repo, "add", name)
+    git(repo, "commit", "-m", "substring secret paths")
 
-    analysis, _ = analyze_repository(resolve_repository(str(repo)), AuditOptions())
+    analysis, result = run_repository_audit(resolve_repository(str(repo)), AuditOptions(profile="quick"), run_id="run-1", client=CountingClient())
 
-    item = next(item for item in analysis.coverage if item.path == "tests/fixtures/sample.pem")
-    assert item.status == "excluded"
-    assert item.reason == "secret_sample_excluded"
+    assert result.final_decision == "BLOCKED"
+    assert result.copilot_call_count == 0
+    blocked = {item.path for item in analysis.coverage if item.status == "blocked"}
+    assert {"tests/production.pem", "examples/real-private.key", "contest/.env", "documentation-backup/prod.p12"} <= blocked
 
 
 def test_audit_report_outputs_to_engine_only(tmp_path: Path) -> None:
@@ -259,6 +339,75 @@ def test_audit_report_outputs_to_engine_only(tmp_path: Path) -> None:
     summary = json.loads((paths.output_root / context.project_id / "latest" / "repository-summary.json").read_text(encoding="utf-8"))
     assert summary["execution_mode"] == "analysis_only"
     assert summary["review_completed"] is False
+
+
+def test_analysis_only_expected_calls_zero_even_with_many_batches(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path / "repo")
+    for index in range(20):
+        (repo / "src" / f"file_{index}.py").write_text("print('x')\n", encoding="utf-8")
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "many")
+
+    analysis, result = run_repository_audit(
+        resolve_repository(str(repo)),
+        AuditOptions(no_agents=True, max_files_per_batch=1, max_copilot_calls=0),
+        run_id="run-1",
+        client=CountingClient(),
+    )
+
+    assert analysis.expected_copilot_calls == 0
+    assert result.copilot_call_count == 0
+    assert result.max_active_calls == 0
+    assert result.final_decision == "ANALYSIS_ONLY"
+
+
+def test_no_reviewable_files_is_inconclusive_without_copilot(tmp_path: Path) -> None:
+    repo = tmp_path / "empty"
+    repo.mkdir()
+    git(repo, "init", "-b", "main")
+    git(repo, "config", "user.email", "test@example.com")
+    git(repo, "config", "user.name", "Test User")
+    git(repo, "commit", "--allow-empty", "-m", "empty")
+
+    analysis, result = run_repository_audit(resolve_repository(str(repo)), AuditOptions(profile="quick"), run_id="run-1", client=CountingClient())
+
+    assert analysis.expected_batches == 0
+    assert result.no_reviewable_files is True
+    assert result.final_decision == "INCONCLUSIVE"
+    assert result.copilot_call_count == 0
+
+
+def test_binary_only_is_no_reviewable_files(tmp_path: Path) -> None:
+    repo = tmp_path / "binary"
+    repo.mkdir()
+    git(repo, "init", "-b", "main")
+    git(repo, "config", "user.email", "test@example.com")
+    git(repo, "config", "user.name", "Test User")
+    (repo / "image.png").write_bytes(b"\x89PNG")
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "binary")
+
+    _analysis, result = run_repository_audit(resolve_repository(str(repo)), AuditOptions(profile="quick"), run_id="run-1", client=CountingClient())
+
+    assert result.final_decision == "INCONCLUSIVE"
+    assert result.no_reviewable_files is True
+    assert result.copilot_call_count == 0
+
+
+def test_secret_only_prioritizes_blocked_over_no_reviewable(tmp_path: Path) -> None:
+    repo = tmp_path / "secret-only"
+    repo.mkdir()
+    git(repo, "init", "-b", "main")
+    git(repo, "config", "user.email", "test@example.com")
+    git(repo, "config", "user.name", "Test User")
+    (repo / ".env").write_text("TOKEN=SECRET_VALUE_SHOULD_NOT_APPEAR\n", encoding="utf-8")
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "secret")
+
+    _analysis, result = run_repository_audit(resolve_repository(str(repo)), AuditOptions(profile="quick"), run_id="run-1", client=CountingClient())
+
+    assert result.final_decision == "BLOCKED"
+    assert result.copilot_call_count == 0
 
 
 def test_worktree_supported(tmp_path: Path) -> None:
@@ -353,6 +502,30 @@ def test_copilot_exception_kind_mapping(message: str, kind: str) -> None:
     assert info.kind == kind
     assert info.agent == "security"
     assert info.batch_id == "batch-001"
+    assert "\n" not in info.message
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "ghp_123456789012345678901234567890123456",
+        "AKIA1234567890ABCDEF",
+        "Bearer abcdefghijklmnopqrstuvwxyz123456",
+        "postgres://user:password123456@localhost/db",
+        "password=supersecret123456",
+        "-----BEGIN PRIVATE KEY-----",
+        "line1\nline2\n" + "x" * 300,
+    ],
+)
+def test_safe_error_message_never_contains_secret_values(message: str) -> None:
+    info = _classify_copilot_exception(RuntimeError(message), agent="security", batch_id="batch-001")
+
+    assert "ghp_" not in info.message
+    assert "AKIA" not in info.message
+    assert "Bearer" not in info.message
+    assert "postgres://" not in info.message
+    assert "password=" not in info.message
+    assert "PRIVATE KEY" not in info.message
     assert "\n" not in info.message
 
 

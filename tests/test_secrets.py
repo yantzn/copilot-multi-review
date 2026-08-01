@@ -17,7 +17,7 @@ class FakeClient:
     def __init__(self) -> None:
         self.calls: list[str] = []
 
-    def run_prompt(self, prompt: str, *, timeout_seconds: int) -> str:
+    def run_prompt(self, prompt: str, *, timeout_seconds: int, cancel_requested=None) -> str:
         self.calls.append(prompt)
         raise AssertionError("Copilot should not be called")
 

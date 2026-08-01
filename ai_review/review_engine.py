@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import json
+import os
 from pathlib import Path
+import platform
 import subprocess
+import threading
 import time
 from typing import Callable
 import uuid
@@ -59,26 +62,53 @@ class EngineResult:
 class CopilotClient:
     provider = "github-copilot-cli"
 
-    def run_prompt(self, prompt: str, *, timeout_seconds: int) -> str:
+    def run_prompt(self, prompt: str, *, timeout_seconds: int, cancel_requested: Callable[[], bool] | None = None) -> str:
         command = resolve_copilot_command([])
-        completed = subprocess.run(
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if platform.system() == "Windows" else 0
+        process = subprocess.Popen(
             command.command,
-            input=prompt.encode("utf-8"),
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            check=False,
-            timeout=timeout_seconds,
             shell=False,
+            start_new_session=platform.system() != "Windows",
+            creationflags=creationflags,
         )
-        if completed.returncode != 0:
-            stderr = decode_output(completed.stderr)
+        stdout_chunks: list[bytes] = []
+        stderr_chunks: list[bytes] = []
+        assert process.stdin is not None
+        assert process.stdout is not None
+        assert process.stderr is not None
+        readers = [
+            threading.Thread(target=_read_stream, args=(process.stdout, stdout_chunks), daemon=True),
+            threading.Thread(target=_read_stream, args=(process.stderr, stderr_chunks), daemon=True),
+        ]
+        for reader in readers:
+            reader.start()
+        try:
+            process.stdin.write(prompt.encode("utf-8"))
+            process.stdin.close()
+            deadline = time.monotonic() + timeout_seconds
+            while process.poll() is None:
+                if cancel_requested and cancel_requested():
+                    _terminate_process_tree(process)
+                    raise AgentCancelledError("Copilot execution was cancelled")
+                if time.monotonic() >= deadline:
+                    _terminate_process_tree(process)
+                    raise subprocess.TimeoutExpired(command.command, timeout_seconds)
+                time.sleep(0.2)
+        finally:
+            for reader in readers:
+                reader.join(timeout=1)
+        if process.returncode != 0:
+            stderr = decode_output(b"".join(stderr_chunks))
             category = classify_copilot_error(stderr)
             if category == "rate_limit":
                 raise ReviewEngineError("Copilot CLI rate limit")
             if category == "auth":
                 raise ReviewEngineError("Copilot CLI authentication failed")
             raise ReviewEngineError(f"Copilot CLI failed: {category}")
-        return decode_output(completed.stdout)
+        return decode_output(b"".join(stdout_chunks))
 
 
 def run_review_engine(request: EngineRequest, client: CopilotClient | None = None) -> EngineResult:
@@ -125,11 +155,13 @@ def run_review_engine(request: EngineRequest, client: CopilotClient | None = Non
         max_concurrent = max(max_concurrent, current_concurrent)
         started = time.monotonic()
         try:
-            prompt = _build_prompt(request, agent, results)
-            result = _run_agent_with_retry(client, prompt, request, agent)
+            result = _run_agent_with_retry(client, request, agent, results)
             results.append(result)
             states[agent] = "completed"
             completed_agents.append(agent)
+        except AgentCancelledError:
+            states[agent] = "cancelled"
+            raise
         except subprocess.TimeoutExpired:
             states[agent] = "failed"
             failed = True
@@ -198,17 +230,24 @@ def parse_agent_response(raw: str, *, run_id: str, agent: str) -> AgentResult:
     )
 
 
-def _run_agent_with_retry(client: CopilotClient, prompt: str, request: EngineRequest, agent: str) -> AgentResult:
+def _run_agent_with_retry(client: CopilotClient, request: EngineRequest, agent: str, previous: list[AgentResult]) -> AgentResult:
     last_error: AgentSchemaError | AgentRunIdMismatchError | None = None
+    retry_note = ""
     for attempt in range(2):
-        raw = client.run_prompt(prompt, timeout_seconds=request.timeout_seconds)
+        payload = _build_payload(request, agent, previous)
+        if retry_note:
+            payload["retry_instruction"] = retry_note
+        if scan_payload(payload).blocked:
+            raise ReviewEngineError("payload secret blocked")
+        prompt = _build_prompt(agent, payload)
+        raw = client.run_prompt(prompt, timeout_seconds=request.timeout_seconds, cancel_requested=lambda: _is_cancelled(request.cancel_file))
         try:
             return parse_agent_response(raw, run_id=request.run_id, agent=agent)
         except AgentRunIdMismatchError:
             raise
         except AgentSchemaError as exc:
             last_error = exc
-            prompt += "\n\n前回の応答はSchemaに一致しません。JSON objectのみを返してください。"
+            retry_note = "前回の応答はSchemaに一致しません。JSON objectのみを返してください。"
             if attempt == 1:
                 raise
     raise last_error or AgentSchemaError("Schema検証に失敗しました。")
@@ -246,10 +285,9 @@ def _validate_payload(payload: dict) -> None:
             raise AgentSchemaError("finding severityが不正です。")
 
 
-def _build_prompt(request: EngineRequest, agent: str, previous: list[AgentResult]) -> str:
+def _build_prompt(agent: str, payload: dict) -> str:
     prompt_path = Path(__file__).resolve().parent.parent / "agents" / f"{agent}.md"
     prompt = prompt_path.read_text(encoding="utf-8")
-    payload = _build_payload(request, agent, previous)
     return prompt + "\n\nJSONで回答してください。\nPAYLOAD_JSON\n" + json.dumps(payload, ensure_ascii=False)
 
 
@@ -289,3 +327,32 @@ def _failed_result(run_id: str, agent: str, reason: str) -> AgentResult:
 
 def _is_cancelled(cancel_file: Path | None) -> bool:
     return bool(cancel_file and cancel_file.exists())
+
+
+def _read_stream(stream, chunks: list[bytes]) -> None:
+    while True:
+        chunk = stream.read(8192)
+        if not chunk:
+            return
+        chunks.append(chunk)
+
+
+def _terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is not None:
+        return
+    if platform.system() == "Windows":
+        subprocess.run(["taskkill", "/PID", str(process.pid), "/T"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, shell=False)
+        time.sleep(0.5)
+        if process.poll() is None:
+            subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, shell=False)
+        return
+    try:
+        os.killpg(process.pid, 15)
+    except ProcessLookupError:
+        return
+    time.sleep(0.5)
+    if process.poll() is None:
+        try:
+            os.killpg(process.pid, 9)
+        except ProcessLookupError:
+            return

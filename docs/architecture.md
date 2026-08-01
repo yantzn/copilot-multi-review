@@ -90,12 +90,18 @@ Execution remains strictly serial: batch by batch, then agent by agent, followed
 
 Confirmed secrets detected before sending any audit payload make the whole run `BLOCKED` and keep Copilot call count at `0`. Prompt text, unchecked file contents, and secret values are not persisted.
 
-Tracked or explicitly included secret files such as `.env`, `.env.*`, `*.key`, `*.pem`, and `*.p12` are treated as confirmed secret files by default. Fixture, detector definition, and documentation sample contexts can be non-blocking, but real tokens and real PEM blocks remain blocking.
+Tracked or explicitly included secret files such as `.env`, `.env.*`, `*.key`, `*.pem`, and `*.p12` are treated as confirmed secret files by default. The MVP implementation does not infer fixture, sample, or documentation safety from path substrings. A future allowlist must be explicit, configured centrally, and paired with content inspection.
+
+Before each batch and cross-repository Copilot call, the engine builds the exact payload that will be serialized into the prompt, including the last two previous results. That same payload is scanned for secrets before `json.dumps()`. If a previous agent result includes a token-like value, the current and subsequent agents are not started and the run becomes `BLOCKED`.
 
 Audit output is stored under `reports/<project-id>/history/<run-id>/` and mirrored to `latest/`. `repository-summary.json` stores aggregate counts, `coverage.json` stores per-file status and reason, `batches/` stores batch plans, and `agents/` stores per-agent results. The target repository is never used as an output root.
 
 Coverage has both file-level aggregation and segment-level details. File status is aggregated safely: `blocked`, `failed`, `cancelled`, `unreviewed`, and `skipped` take precedence over `reviewed`. Batch states are tracked separately as `pending`, `running`, `completed`, `failed`, `blocked`, `cancelled`, and `skipped`; cancelled batches are not counted as failed.
 
 Copilot errors are sanitized and classified as `authentication`, `rate_limit`, `timeout`, `schema_validation`, `cancelled`, `process_start`, `network`, or `unexpected`. Stored error records include kind, agent, batch ID, safe message, retryability, and timestamp only.
+
+The Copilot runner uses `subprocess.Popen()` so cancellation can be observed while a process is running. Windows cancellation targets the exact PID with `taskkill /PID <pid> /T`, with force only after a short grace period. POSIX cancellation targets only the process group created for that Copilot invocation. Name-based process killing is not used.
+
+If a normal audit has no reviewable segments or batches, it does not run cross agents and returns `INCONCLUSIVE` with `no_reviewable_files`. Secret findings still take precedence and return `BLOCKED`. Analysis-only mode sets expected Copilot calls to `0` and remains a successful planning run.
 
 Configuration precedence is CLI explicit value, rerun request value, `config/common.json`, then code fallback. `config/common.json` is the normal source of repository audit defaults.
