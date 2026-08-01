@@ -182,6 +182,12 @@ def format_running_status(status: dict) -> str:
         "BLOCKEDバッチ:",
         *(f"- {batch}" for batch in (status.get("blocked_batches") or [])),
         *([] if status.get("blocked_batches") else ["- なし"]),
+        "キャンセルバッチ:",
+        *(f"- {batch}" for batch in (status.get("cancelled_batches") or [])),
+        *([] if status.get("cancelled_batches") else ["- なし"]),
+        "スキップバッチ:",
+        *(f"- {batch}" for batch in (status.get("skipped_batches") or [])),
+        *([] if status.get("skipped_batches") else ["- なし"]),
         "待機:",
         *(f"- {agent}" for agent in pending),
         *([] if pending else ["- なし"]),
@@ -272,13 +278,20 @@ def save_repository_audit_result(paths: RootPaths, repository: RepositoryContext
         "excluded_file_count": sum(1 for item in audit_result.coverage if item.status == "excluded"),
         "skipped_file_count": sum(1 for item in audit_result.coverage if item.status == "skipped"),
         "failed_file_count": sum(1 for item in audit_result.coverage if item.status == "failed"),
+        "blocked_file_count": sum(1 for item in audit_result.coverage if item.status == "blocked"),
+        "cancelled_file_count": sum(1 for item in audit_result.coverage if item.status == "cancelled"),
+        "unreviewed_file_count": sum(1 for item in audit_result.coverage if item.status == "unreviewed"),
         "total_batches": len(audit_result.batches),
-        "completed_batches": len(audit_result.batches) - len(audit_result.failed_batches) - len(audit_result.blocked_batches),
+        "completed_batches": len(audit_result.completed_batches),
         "failed_batches": len(audit_result.failed_batches),
         "blocked_batches": len(audit_result.blocked_batches),
+        "cancelled_batches": len(audit_result.cancelled_batches),
+        "skipped_batches": len(audit_result.skipped_batches),
         "estimated_total_lines": analysis.estimated_total_lines,
         "copilot_call_count": audit_result.copilot_call_count,
         "elapsed_seconds": audit_result.elapsed_seconds,
+        "execution_mode": audit_result.execution_mode,
+        "review_completed": audit_result.review_completed,
     }
     run_json = {
         "project_id": repository.project_id,
@@ -291,7 +304,9 @@ def save_repository_audit_result(paths: RootPaths, repository: RepositoryContext
         "mode": "repository_audit",
         "profile": audit_result.profile,
         "request": request,
-        "agent_states": {batch.batch_id: "completed" for batch in audit_result.batches},
+        "execution_mode": audit_result.execution_mode,
+        "review_completed": audit_result.review_completed,
+        "agent_states": _audit_agent_states(audit_result),
         "run_id": audit_result.run_id,
         "started_at": now_iso(),
         "finished_at": now_iso(),
@@ -303,7 +318,13 @@ def save_repository_audit_result(paths: RootPaths, repository: RepositoryContext
         "max_concurrent_copilot_processes": audit_result.max_active_calls,
         "blocked_batches": audit_result.blocked_batches,
         "failed_batches": audit_result.failed_batches,
+        "cancelled_batches": audit_result.cancelled_batches,
+        "skipped_batches": audit_result.skipped_batches,
+        "completed_batches": audit_result.completed_batches,
         "unreviewed_files": audit_result.unreviewed_files,
+        "execution_mode": audit_result.execution_mode,
+        "review_completed": audit_result.review_completed,
+        "errors": [asdict(item) for item in audit_result.errors],
     }
     coverage_json = [asdict(item) for item in audit_result.coverage]
     (history_dir / "run.json").write_text(json.dumps(run_json, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -322,6 +343,24 @@ def save_repository_audit_result(paths: RootPaths, repository: RepositoryContext
         shutil.rmtree(latest_dir)
     shutil.copytree(history_dir, latest_dir)
     return history_dir
+
+
+def _audit_agent_states(audit_result) -> dict[str, str]:
+    states: dict[str, str] = {}
+    for batch in audit_result.batches:
+        if batch.batch_id in audit_result.completed_batches:
+            states[batch.batch_id] = "completed"
+        elif batch.batch_id in audit_result.failed_batches:
+            states[batch.batch_id] = "failed"
+        elif batch.batch_id in audit_result.blocked_batches:
+            states[batch.batch_id] = "blocked"
+        elif batch.batch_id in audit_result.cancelled_batches:
+            states[batch.batch_id] = "cancelled"
+        elif batch.batch_id in audit_result.skipped_batches:
+            states[batch.batch_id] = "skipped"
+        else:
+            states[batch.batch_id] = "pending"
+    return states
 
 
 def load_latest(paths: RootPaths, project_id: str) -> dict:

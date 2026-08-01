@@ -135,6 +135,8 @@ ai-review status --repo <path>
 ai-review status --repo <path> --watch
 ```
 
+`status --watch` prints again only when the rendered status changes, so long repository audits do not fill the terminal with duplicate snapshots.
+
 To cancel the current run:
 
 ```bash
@@ -143,6 +145,29 @@ ai-review cancel --repo <path>
 
 Cancellation stops only the current Copilot child process, prevents later batches and agents from starting, and preserves completed results. Pending items are recorded as cancelled or skipped in the final runtime/report state.
 
+Cancelled and failed are separate states. A cancelled run keeps the final review decision `INCONCLUSIVE` and records cancelled batches separately from failed batches.
+
 VS Code includes quick, standard, and deep audit launch configurations. The flow is unchanged: press run, select the target Git repository, review the preflight summary, then choose whether to execute. Copilot is not called before confirmation.
 
 Audit reports are under `reports/<project-id>/history/<run-id>/` with `run.json`, `final.json`, `repository-summary.json`, `coverage.json`, `batches/`, `agents/`, and `report.md`. `latest/` is updated with the final result. Inspect `coverage.json` first when the final result is `INCONCLUSIVE` or `BLOCKED`.
+
+`coverage.json` includes segment details for large files. Each segment has `batch_id`, `start_line`, `end_line`, `status`, executed agents, and reason. Secret files are blocked by default rather than merely excluded.
+
+`--no-agents` is an analysis-only mode:
+
+```bash
+ai-review audit --repo <path> --no-agents
+```
+
+It stores repository analysis, batch planning, expected Copilot calls, and initial coverage without running Copilot. The CLI exits with 0 and records `execution_mode: analysis_only` and `review_completed: false`.
+
+Audit CLI exit codes:
+
+- `0`: `APPROVE`, `APPROVE_WITH_NOTES`, or successful `analysis_only`
+- `1`: `CHANGES_REQUIRED`
+- `2`: `BLOCKED`
+- `3`: `INCONCLUSIVE`
+- `4`: cancelled
+- `10`: pre-run audit error
+
+Defaults come from `config/common.json`. CLI options override those values; `--rerun` restores the previous request before common-config fallback is applied.

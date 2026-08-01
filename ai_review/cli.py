@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+from pathlib import Path
 import sys
 import time
 
@@ -112,14 +114,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _add_audit_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--repo", required=True, help="監査対象のローカルGitリポジトリパス")
-    parser.add_argument("--profile", choices=["quick", "standard", "deep"], default="standard")
+    parser.add_argument("--profile", choices=["quick", "standard", "deep"], default=None)
     parser.add_argument("--include-untracked", action="store_true")
-    parser.add_argument("--max-batches", type=int, default=30)
-    parser.add_argument("--max-files", type=int, default=1000)
-    parser.add_argument("--max-total-lines", type=int, default=100000)
-    parser.add_argument("--max-copilot-calls", type=int, default=150)
-    parser.add_argument("--max-files-per-batch", type=int, default=30)
-    parser.add_argument("--max-lines-per-batch", type=int, default=5000)
+    parser.add_argument("--max-batches", type=int, default=None)
+    parser.add_argument("--max-files", type=int, default=None)
+    parser.add_argument("--max-total-lines", type=int, default=None)
+    parser.add_argument("--max-copilot-calls", type=int, default=None)
+    parser.add_argument("--max-files-per-batch", type=int, default=None)
+    parser.add_argument("--max-lines-per-batch", type=int, default=None)
+    parser.add_argument("--max-chars-per-batch", type=int, default=None)
+    parser.add_argument("--max-file-bytes", type=int, default=None)
     parser.add_argument("--rerun", action="store_true", help="前回条件で完全再実行します")
     parser.add_argument("--no-agents", action="store_true", help="Copilotを呼ばず事前分析とレポート保存だけ行います")
 
@@ -136,14 +140,16 @@ def handle_review(args: argparse.Namespace) -> int:
     if args.target == "repository":
         audit_args = argparse.Namespace(
             repo=args.repo,
-            profile="standard",
+            profile=None,
             include_untracked=False,
-            max_batches=30,
-            max_files=1000,
-            max_total_lines=100000,
-            max_copilot_calls=150,
-            max_files_per_batch=30,
-            max_lines_per_batch=5000,
+            max_batches=None,
+            max_files=None,
+            max_total_lines=None,
+            max_copilot_calls=None,
+            max_files_per_batch=None,
+            max_lines_per_batch=None,
+            max_chars_per_batch=None,
+            max_file_bytes=None,
             rerun=False,
             no_agents=getattr(args, "no_agents", False),
         )
@@ -303,12 +309,17 @@ def handle_audit(args: argparse.Namespace) -> int:
                 "max_copilot_calls": options.max_copilot_calls,
                 "max_files_per_batch": options.max_files_per_batch,
                 "max_lines_per_batch": options.max_lines_per_batch,
+                "max_chars_per_batch": options.max_chars_per_batch,
+                "max_file_bytes": options.max_file_bytes,
             },
         )
     print(f"Final decision: {result.final_decision}")
+    if result.execution_mode == "analysis_only":
+        print("Execution mode: ANALYSIS_ONLY")
+        print("Review decision: NOT_RUN")
     print(f"Max concurrent Copilot processes: {result.max_active_calls}")
     print(f"Report: {paths.output_root / repository.project_id / 'latest' / 'report.md'}")
-    return 0
+    return _audit_exit_code(result)
 
 
 def _restore_audit_rerun_options(args: argparse.Namespace, project_id: str) -> None:
@@ -325,50 +336,96 @@ def _restore_audit_rerun_options(args: argparse.Namespace, project_id: str) -> N
         "max_copilot_calls",
         "max_files_per_batch",
         "max_lines_per_batch",
+        "max_chars_per_batch",
+        "max_file_bytes",
     ):
         if key in request:
             setattr(args, key, request[key])
 
 
 def _audit_options_from_args(args: argparse.Namespace) -> AuditOptions:
+    defaults = _repository_audit_config()
+
+    def value(name: str):
+        arg_value = getattr(args, name)
+        if arg_value is not None:
+            return arg_value
+        return defaults.get(name, AuditOptions.__dataclass_fields__[name].default)
+
     return AuditOptions(
-        profile=args.profile,
+        profile=value("profile"),
         include_untracked=args.include_untracked,
-        max_batches=args.max_batches,
-        max_files=args.max_files,
-        max_total_lines=args.max_total_lines,
-        max_copilot_calls=args.max_copilot_calls,
-        max_files_per_batch=args.max_files_per_batch,
-        max_lines_per_batch=args.max_lines_per_batch,
+        max_batches=value("max_batches"),
+        max_files=value("max_files"),
+        max_total_lines=value("max_total_lines"),
+        max_copilot_calls=value("max_copilot_calls"),
+        max_files_per_batch=value("max_files_per_batch"),
+        max_lines_per_batch=value("max_lines_per_batch"),
+        max_chars_per_batch=value("max_chars_per_batch"),
+        max_file_bytes=value("max_file_bytes"),
         rerun=args.rerun,
         no_agents=args.no_agents,
     )
 
 
+def _repository_audit_config() -> dict:
+    path = Path(__file__).resolve().parent.parent / "config" / "common.json"
+    try:
+        return json.loads(path.read_text(encoding="utf-8")).get("repository_audit", {})
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _audit_exit_code(result) -> int:
+    if result.execution_mode == "analysis_only":
+        return 0
+    if result.cancelled_batches:
+        return 4
+    return {
+        "APPROVE": 0,
+        "APPROVE_WITH_NOTES": 0,
+        "CHANGES_REQUIRED": 1,
+        "BLOCKED": 2,
+        "INCONCLUSIVE": 3,
+    }.get(result.final_decision, 3)
+
+
 def handle_status(args: argparse.Namespace) -> int:
     paths = RootPaths.from_engine_root()
+    last_output = ""
 
-    def show_once() -> bool:
+    def show_once(*, force: bool = False) -> tuple[bool, str]:
         project_id = resolve_repository(args.repo).project_id if args.repo else None
         statuses = load_running_statuses(paths, project_id)
         if not statuses:
-            print("実行中レビューはありません。")
-            return True
+            output = "実行中レビューはありません。"
+            if force:
+                print(output)
+            return True, output
+        parts: list[str] = []
         for index, status in enumerate(statuses):
             if index:
-                print()
-            print(format_running_status(status))
+                parts.append("")
+            parts.append(format_running_status(status))
+        output = "\n".join(parts)
+        if force:
+            print(output)
         terminal = {"completed", "failed", "blocked", "cancelled"}
-        return all(str(status.get("status", "")).lower() in terminal for status in statuses)
+        return all(str(status.get("status", "")).lower() in terminal for status in statuses), output
 
     if not args.watch:
-        show_once()
+        show_once(force=True)
         return 0
 
     interval = max(1.0, args.interval)
     try:
         while True:
-            if show_once():
+            nonlocal_last_output = last_output
+            done, output = show_once()
+            if output != nonlocal_last_output:
+                print(output)
+                last_output = output
+            if done:
                 return 0
             time.sleep(interval)
     except KeyboardInterrupt:

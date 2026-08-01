@@ -185,6 +185,8 @@ Git管理対象ファイルは `git ls-files -z` でNUL区切り収集します�
 
 全ファイルを1つの巨大なプロンプトへ詰め込まず、上位ディレクトリ、言語、実装ファイルと関連テスト、推定行数、payloadサイズをもとに `batch-001` 形式の安定したバッチへ分割します。既定上限は `config/common.json` の `repository_audit` で管理します。
 
+巨大ファイルは元ファイル全体ではなく、実際に送信する `start_line` / `end_line` 付きsegmentへ分割します。各segmentは重複しない行範囲とその範囲のcontentだけを持ち、1行だけで文字数上限を超える場合は送信せず `coverage.json` へ `skipped` と理由を記録します。現在の実装は構文単位ではなく、安全な行範囲分割です。
+
 ```bash
 ai-review audit --repo <path> --max-batches 30 --max-files 1000 --max-total-lines 100000 --max-copilot-calls 150
 ai-review audit --repo <path> --rerun
@@ -198,3 +200,19 @@ ai-review status --repo <path> --watch
 ```
 
 レポートは対象リポジトリではなく、この専用リポジトリの `reports/<project-id>/history/<run-id>/` と `reports/<project-id>/latest/` に保存されます。`repository-summary.json` は全体集計、`coverage.json` はファイルごとの `reviewed`、`excluded`、`skipped`、`failed`、`blocked`、`unreviewed` を示します。未確認ファイルや失敗バッチがある場合、最終判定は無条件に `APPROVE` になりません。
+
+`coverage.json` はファイル単位の集約statusに加えて、複数segmentの詳細を持ちます。segmentには `batch_id`、`start_line`、`end_line`、`status`、`executed_agents`、`reason` が保存されます。ファイル単位statusは安全側で集約され、`blocked`、`failed`、`cancelled`、`unreviewed`、`skipped` が `reviewed` より優先されます。
+
+`.env`、`.env.*`、`*.key`、`*.pem`、`*.p12` などの秘密ファイルがGit管理対象または明示対象に含まれる場合、既定では全体を `BLOCKED` とし、Copilot呼び出し回数は0になります。fixture、検出器定義、ドキュメントサンプルは文脈に応じて非ブロッキングに分類しますが、実Tokenや実PEMはブロックします。
+
+`--no-agents` は失敗ではなく `analysis_only` です。対象ファイル、除外理由、batch計画、想定Copilot呼び出し数、初期coverageを保存し、レビュー判定は未実施として扱います。
+
+batch状態は `pending`、`running`、`completed`、`failed`、`blocked`、`cancelled`、`skipped` を分離して記録します。cancelはfailedへ混ぜず、完了済み結果を保持し、後続batchは起動しません。Copilot例外は `authentication`、`rate_limit`、`timeout`、`schema_validation`、`cancelled`、`process_start`、`network`、`unexpected` に分類し、完全promptや秘密値は保存しません。
+
+`status --watch` は状態が変化した場合だけ再出力し、長時間監査で同じ内容を大量追記しないようにしています。
+
+deep profileでは各バッチに8専門エージェントを実行し、`final`は全バッチ結果を統合する横断フェーズで1回だけ実行します。
+
+CLI終了コードは、`APPROVE` / `APPROVE_WITH_NOTES` / `analysis_only` が0、`CHANGES_REQUIRED`が1、`BLOCKED`が2、`INCONCLUSIVE`が3、cancelが4です。実行前の監査エラーは既存のCLIエラー体系で10を返します。
+
+監査上限の優先順位は、CLI明示値、`--rerun`保存値、`config/common.json`、コード上の最終fallbackです。

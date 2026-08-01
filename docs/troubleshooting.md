@@ -100,9 +100,29 @@ cancelは現在のrun IDだけを対象にし、広範囲なプロセスkillは�
 
 `unreviewed`、`failed`、`blocked` が残る場合、最終判定は無条件に `APPROVE` になりません。
 
+巨大ファイルはsegmentへ分割されます。`segments` 配列の `start_line` / `end_line` を確認してください。1行だけで文字数上限を超える場合は `skipped` になり、理由は `single_line_exceeds_char_limit` です。
+
 ## シークレットでBLOCKEDになる
 
 confirmed secretが1件でもある場合、リポジトリ全体監査は `BLOCKED` になり、Copilot呼び出し回数は0になります。`.env`、PEM、秘密鍵、token、DB接続文字列などはCopilotへ送信しません。検出器定義、テストfixture、ドキュメントサンプルは文脈に応じて非ブロッキング扱いしますが、実Tokenや実PEMはブロックします。
+
+`.env`、`.env.*`、`*.key`、`*.pem`、`*.p12` がGit管理対象または `--include-untracked` で明示対象に入る場合は、既定で `confirmed_secret_file` として全体を `BLOCKED` にします。公開証明書サンプルやfixtureの詳細な例外設定は将来拡張ですが、現状も `tests/fixtures`、`sample`、`example`、`docs` などの文脈では非ブロッキング除外として扱います。
+
+## analysis-onlyとINCONCLUSIVEの違い
+
+`--no-agents` は `analysis_only` であり、レビュー失敗ではありません。Copilot呼び出しは0で、batch計画とcoverage初期状態だけを保存します。通常監査で失敗、cancel、未確認が残った場合は `INCONCLUSIVE` です。
+
+## failedとcancelledの違い
+
+Copilot例外やschema不一致などは `failed` です。ユーザーのcancel要求は `cancelled` で、後続batchは `skipped` になります。cancelledはfailedに混ぜません。
+
+## Copilot例外分類
+
+レポートには `authentication`、`rate_limit`、`timeout`、`schema_validation`、`cancelled`、`process_start`、`network`、`unexpected` のいずれかを保存します。完全prompt、秘密値、未マスクstdout/stderr、stack trace全文は保存しません。
+
+## status --watchが更新されない
+
+`status --watch` は状態変化時だけ再出力します。同じ表示が続く場合は、重複出力を抑制している状態です。別ターミナルで `ai-review status --repo <path>` を一度だけ実行すると現在値を確認できます。
 
 ## Windowsで文字化けやBAT/CMD起動問題がある
 

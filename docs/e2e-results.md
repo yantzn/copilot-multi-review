@@ -26,6 +26,13 @@ Environment:
 | Repository audit status | Passed | automated tests cover running status fields and watch terminal conditions |
 | Repository audit rerun | Passed | previous audit request can be restored for full rerun |
 | Repository audit worktree | Passed | automated worktree collection test passed |
+| Repository audit 15,000-line file | Passed | automated test confirms three non-overlapping 5,000-line segments |
+| Repository audit tracked + untracked | Passed | automated test confirms tracked flags and `--include-untracked` behavior |
+| Repository audit secret file BLOCKED | Passed | `.env`, `.env.local`, `.key`, `.pem`, `.p12` block with Copilot calls 0 |
+| Repository audit analysis-only | Passed | `--no-agents` records `execution_mode: analysis_only` |
+| Repository audit cancelled vs failed | Passed | automated tests keep cancelled batches out of failed batches |
+| Repository audit Copilot error classification | Passed | authentication/rate limit/timeout/schema/process/network/cancel/unexpected mappings tested |
+| Repository audit status watch suppression | Passed | automated CLI test prints unchanged status only once |
 
 Residual manual checks:
 

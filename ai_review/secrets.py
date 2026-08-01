@@ -16,6 +16,8 @@ class SecretFinding:
     file: str | None
     line: int | None
     fingerprint: str
+    blocking: bool = False
+    reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -24,7 +26,7 @@ class SecretScanResult:
 
     @property
     def blocked(self) -> bool:
-        return any(item.classification == "confirmed" for item in self.findings)
+        return any(item.blocking for item in self.findings)
 
 
 PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -51,7 +53,7 @@ PEM_END_MARKERS = {
     ),
 }
 
-PAYLOAD_EXCLUDED_KEYS = {"secret_findings", "excluded_files", "diff"}
+PAYLOAD_EXCLUDED_KEYS = {"secret_findings", "excluded_files"}
 BASE64_LINE = re.compile(r"^[A-Za-z0-9+/=]{4,}$")
 
 
@@ -70,7 +72,7 @@ def scan_diff_for_secrets(diff: DiffSummary) -> SecretScanResult:
         content = line[1:]
         for category, pattern in PATTERNS:
             for match in pattern.finditer(content):
-                classification = classify_secret_candidate(current_file, content, category, lines[index + 1 :])
+                classification, blocking, reason = classify_secret_candidate(current_file, content, category, lines[index + 1 :])
                 fingerprint = _fingerprint(match.group(0))
                 key = (category, current_file, line_number, fingerprint)
                 if key in seen:
@@ -84,6 +86,8 @@ def scan_diff_for_secrets(diff: DiffSummary) -> SecretScanResult:
                         file=current_file,
                         line=line_number,
                         fingerprint=fingerprint,
+                        blocking=blocking,
+                        reason=reason,
                     )
                 )
     return SecretScanResult(findings=findings)
@@ -99,6 +103,8 @@ def scan_payload(payload: Any) -> SecretScanResult:
             for child_key, child in value.items():
                 if child_key in PAYLOAD_EXCLUDED_KEYS:
                     continue
+                if path == [] and child_key == "diff":
+                    continue
                 walk(child, [*path, str(child_key)], next_context)
             return
         if isinstance(value, list):
@@ -111,7 +117,7 @@ def scan_payload(payload: Any) -> SecretScanResult:
         source_path = ".".join(path)
         for category, pattern in PATTERNS:
             for match in pattern.finditer(value):
-                classification = classify_secret_candidate(context_file, value, category, [])
+                classification, blocking, reason = classify_secret_candidate(context_file, value, category, [])
                 fingerprint = _fingerprint(match.group(0))
                 key = (category, context_file, None, fingerprint)
                 if key in seen:
@@ -125,6 +131,8 @@ def scan_payload(payload: Any) -> SecretScanResult:
                         file=context_file,
                         line=None,
                         fingerprint=fingerprint,
+                        blocking=blocking,
+                        reason=reason,
                     )
                 )
 
@@ -145,7 +153,7 @@ def combine_secret_scans(*scans: SecretScanResult) -> SecretScanResult:
     return SecretScanResult(findings)
 
 
-def classify_secret_candidate(file: str | None, line: str, category: str, following_lines: list[str] | None = None) -> str:
+def classify_secret_candidate(file: str | None, line: str, category: str, following_lines: list[str] | None = None) -> tuple[str, bool, str | None]:
     normalized = (file or "").replace("\\", "/")
     lowered = line.lower()
     if normalized in {"ai_review/secrets.py"} or normalized.startswith("tests/"):
@@ -157,12 +165,17 @@ def classify_secret_candidate(file: str | None, line: str, category: str, follow
             or "write_text" in line
             or "diff_text" in line
         ):
-            return "detector_definition" if normalized == "ai_review/secrets.py" else "test_fixture"
+            classification = "detector_definition" if normalized == "ai_review/secrets.py" else "test_fixture"
+            return classification, False, None
+    if normalized.startswith("docs/") or normalized.lower().endswith((".md", ".rst", ".txt")):
+        if "example" in lowered or "sample" in lowered or "dummy" in lowered or "placeholder" in lowered:
+            return "documentation_sample", False, None
     if category in PEM_END_MARKERS and not _pem_has_real_block(category, line, following_lines or []):
         if normalized == "ai_review/secrets.py" or normalized.startswith("tests/"):
-            return "detector_definition" if normalized == "ai_review/secrets.py" else "test_fixture"
-        return "malformed_pem"
-    return "confirmed"
+            classification = "detector_definition" if normalized == "ai_review/secrets.py" else "test_fixture"
+            return classification, False, None
+        return "confirmed", True, "malformed_pem"
+    return "confirmed", True, None
 
 
 def _pem_has_real_block(category: str, start_line: str, following_lines: list[str]) -> bool:

@@ -24,6 +24,8 @@
     "max_total_lines": 100000,
     "max_copilot_calls": 150,
     "max_files_per_batch": 30,
-    "max_lines_per_batch": 5000
+    "max_lines_per_batch": 5000,
+    "max_chars_per_batch": 120000,
+    "max_file_bytes": 200000
   }
 }

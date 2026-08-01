@@ -140,6 +140,19 @@ def test_payload_scan_excludes_raw_diff_but_scans_other_fields() -> None:
     assert result.findings[0].source == "payload:quality_checks.0.stderr"
 
 
+def test_nested_payload_diff_is_scanned() -> None:
+    payload = {
+        "diff": "+GITHUB_TOKEN=ghp_123456789012345678901234567890123456",
+        "metadata": {"diff": "Authorization: Bearer abcdefghijklmnopqrstuvwxyz123456"},
+    }
+
+    result = scan_payload(payload)
+
+    assert len(result.findings) == 1
+    assert result.findings[0].source == "payload:metadata.diff"
+    assert result.findings[0].blocking is True
+
+
 def test_private_key_end_marker_must_match_category() -> None:
     from ai_review.diff_collector import DiffSummary
 
@@ -157,7 +170,12 @@ def test_private_key_end_marker_must_match_category() -> None:
         truncated=False,
     )
 
-    assert scan_diff_for_secrets(summary).blocked is False
+    result = scan_diff_for_secrets(summary)
+
+    assert result.blocked is True
+    assert result.findings[0].classification == "confirmed"
+    assert result.findings[0].blocking is True
+    assert result.findings[0].reason == "malformed_pem"
 
 
 def test_private_key_real_base64_block_is_confirmed() -> None:
