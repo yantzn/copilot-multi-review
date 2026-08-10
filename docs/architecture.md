@@ -212,6 +212,10 @@ Custom Agent validation has two layers:
 
 An omitted `tools` field is not a general GitHub / VS Code Custom Agent schema error. For `copilot-multi-review` review-only agents, however, `tools` must be explicitly declared so the validator can verify that editing and terminal capabilities are not enabled.
 
+Issue #28 adds UX validation for Copilot Chat subagent visibility. `Review Orchestrator` remains user-selectable. Specialist reviewers and `Final Reviewer` use the officially documented `user-invocable: false` frontmatter field so they do not appear as normal picker entries while remaining available as subagents. They must not set `disable-model-invocation: true`, because that would block ordinary subagent invocation. The Orchestrator uses `tools: ['search/codebase', 'search/usages', 'web/fetch', 'agent']` and an explicit `agents:` list whose names must match the leaf agent `name` fields exactly.
+
+Copilot Chat progress is not implemented by this repository. Users inspect the standard VS Code / GitHub Copilot subagent tool calls for running, completed, failed, prompt/context, tool usage, and result details. See `docs/copilot-chat-review-ux.md` for the operating procedure, product-version assumptions, manual Windows E2E record, and `run_id` notes.
+
 ### Specialist Reviewer Boundaries
 
 Issue #25 adds eight read-only Custom Agent specialist reviewers. They are leaf subagents: the Review Orchestrator may invoke them, but they must not invoke other agents, edit files, run terminal commands, or write review artifacts into the target repository. Each reviewer receives the same primary diff/context and evaluates it independently. Specialist reviewers do not receive `previous_findings`; reviewer results are aggregated only after specialist execution and then passed to the Final Reviewer.

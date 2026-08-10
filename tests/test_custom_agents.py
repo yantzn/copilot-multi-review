@@ -27,6 +27,7 @@ def test_review_orchestrator_agent_definition_exists_and_is_valid() -> None:
 
     assert orchestrator.path.name == "review-orchestrator.agent.md"
     assert orchestrator.description
+    assert orchestrator.metadata.get("user-invocable") is not False
     assert "agent" in orchestrator.tools
     assert set(orchestrator.agents) >= set(SPECIALIST_REVIEWERS.values())
     assert set(orchestrator.agents) >= set(FINAL_REVIEWER.values())
@@ -69,6 +70,15 @@ def test_specialist_reviewers_are_hidden_from_normal_agent_picker() -> None:
 
     for file_name in SPECIALIST_REVIEWERS:
         assert by_file[file_name].metadata.get("user-invocable") is False
+        assert by_file[file_name].metadata.get("disable-model-invocation") is not True
+
+
+def test_final_reviewer_is_hidden_but_subagent_invocable() -> None:
+    definitions = validate_custom_agents(Path.cwd())
+    final = next(item for item in definitions if item.name == "Final Reviewer")
+
+    assert final.metadata.get("user-invocable") is False
+    assert final.metadata.get("disable-model-invocation") is not True
 
 
 def test_specialist_reviewers_are_read_only_leaf_agents() -> None:
@@ -115,6 +125,20 @@ def test_orchestrator_delegates_to_all_specialist_reviewers() -> None:
         assert reviewer_name in orchestrator.instructions
     assert "Final Reviewer Input Contract" in orchestrator.instructions
     assert "Keep specialist reviewers independent" in orchestrator.instructions
+    assert "using the `agent` tool" in orchestrator.instructions
+    assert "Copilot Chat's standard `agent` tool call UI" in orchestrator.instructions
+    assert "Do not create a custom progress UI" in orchestrator.instructions
+
+
+def test_orchestrator_agent_names_match_defined_leaf_agents_exactly() -> None:
+    definitions = validate_custom_agents(Path.cwd())
+    orchestrator = next(item for item in definitions if item.name == "Review Orchestrator")
+    names = {definition.name for definition in definitions}
+    expected = set(SPECIALIST_REVIEWERS.values()) | set(FINAL_REVIEWER.values())
+
+    assert isinstance(orchestrator.agents, list)
+    assert set(orchestrator.agents) == expected
+    assert set(orchestrator.agents) <= names
 
 
 def test_specialist_reviewers_include_common_finding_contract() -> None:
@@ -169,6 +193,21 @@ def test_final_reviewer_documents_input_contract() -> None:
         "reviewer_states",
     ]:
         assert term in final.instructions
+
+
+def test_copilot_chat_review_ux_documentation_exists() -> None:
+    text = Path("docs/copilot-chat-review-ux.md").read_text(encoding="utf-8")
+
+    for term in [
+        "Review Orchestrator",
+        "user-invocable: false",
+        "standard VS Code / GitHub Copilot subagent UI",
+        "disable-model-invocation: true",
+        "run_id",
+        "Windows Manual E2E Record",
+        "No custom progress UI",
+    ]:
+        assert term in text
 
 
 def test_final_reviewer_documents_dedup_and_provenance_contract() -> None:
@@ -458,6 +497,86 @@ Instructions
 
     with pytest.raises(CustomAgentValidationError, match="review-only policy forbids"):
         validate_custom_agents(tmp_path, require_specialist_reviewers=False)
+
+
+def test_orchestrator_cannot_be_hidden_when_full_review_topology_is_required(tmp_path: Path) -> None:
+    write_agent(
+        tmp_path,
+        """---
+name: Review Orchestrator
+description: Coordinate review.
+tools: ['agent']
+agents:
+  - Requirements Reviewer
+  - Correctness Reviewer
+  - Security Reviewer
+  - Testing Reviewer
+  - Maintainability Reviewer
+  - Performance Reviewer
+  - Operations Reviewer
+  - Devil Advocate
+  - Final Reviewer
+user-invocable: false
+---
+Instructions
+""",
+    )
+    agents_dir = tmp_path / ".github" / "agents"
+    for file_name, name in {**SPECIALIST_REVIEWERS, **FINAL_REVIEWER}.items():
+        (agents_dir / file_name).write_text(
+            f"""---
+name: {name}
+description: Leaf reviewer.
+tools: ['search/codebase']
+user-invocable: false
+---
+Instructions
+""",
+            encoding="utf-8",
+        )
+
+    with pytest.raises(CustomAgentValidationError, match="must remain selectable"):
+        validate_custom_agents(tmp_path)
+
+
+def test_specialist_cannot_disable_subagent_invocation(tmp_path: Path) -> None:
+    write_agent(
+        tmp_path,
+        """---
+name: Review Orchestrator
+description: Coordinate review.
+tools: ['agent']
+agents:
+  - Requirements Reviewer
+  - Correctness Reviewer
+  - Security Reviewer
+  - Testing Reviewer
+  - Maintainability Reviewer
+  - Performance Reviewer
+  - Operations Reviewer
+  - Devil Advocate
+  - Final Reviewer
+---
+Instructions
+""",
+    )
+    agents_dir = tmp_path / ".github" / "agents"
+    for file_name, name in {**SPECIALIST_REVIEWERS, **FINAL_REVIEWER}.items():
+        extra = "disable-model-invocation: true\n" if file_name == "security-reviewer.agent.md" else ""
+        (agents_dir / file_name).write_text(
+            f"""---
+name: {name}
+description: Leaf reviewer.
+tools: ['search/codebase']
+user-invocable: false
+{extra}---
+Instructions
+""",
+            encoding="utf-8",
+        )
+
+    with pytest.raises(CustomAgentValidationError, match="must remain invocable as subagents"):
+        validate_custom_agents(tmp_path)
 
 
 def test_invalid_tools_type_is_rejected(tmp_path: Path) -> None:

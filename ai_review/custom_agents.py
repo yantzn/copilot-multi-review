@@ -124,6 +124,10 @@ def validate_review_topology(
             )
         if orchestrator is None:
             raise CustomAgentValidationError("review-only policy requires Review Orchestrator")
+        if orchestrator.metadata.get("user-invocable") is False:
+            raise CustomAgentValidationError(
+                f"{orchestrator.path}: Review Orchestrator must remain selectable by users"
+            )
 
     expected_names = set(SPECIALIST_REVIEWERS.values()) | set(FINAL_REVIEWER.values())
     if orchestrator is not None and orchestrator.agents != "*" and not (
@@ -150,6 +154,10 @@ def _validate_leaf_reviewers(definitions: list[CustomAgentDefinition]) -> None:
             raise CustomAgentValidationError(
                 f"{definition.path}: review-only policy requires user-invocable: false"
             )
+        if definition.metadata.get("disable-model-invocation") is True:
+            raise CustomAgentValidationError(
+                f"{definition.path}: specialist reviewers must remain invocable as subagents"
+            )
         if definition.agents is not None:
             raise CustomAgentValidationError(
                 f"{definition.path}: specialist reviewers must not configure subagents"
@@ -170,6 +178,10 @@ def _validate_leaf_reviewers(definitions: list[CustomAgentDefinition]) -> None:
         if definition.metadata.get("user-invocable") is not False:
             raise CustomAgentValidationError(
                 f"{definition.path}: review-only policy requires user-invocable: false"
+            )
+        if definition.metadata.get("disable-model-invocation") is True:
+            raise CustomAgentValidationError(
+                f"{definition.path}: Final Reviewer must remain invocable as a subagent"
             )
         if definition.agents is not None:
             raise CustomAgentValidationError(
