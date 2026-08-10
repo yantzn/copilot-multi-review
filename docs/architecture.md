@@ -153,3 +153,12 @@ The design forbids:
 - writing review result files into the target repository
 
 Custom Agents may receive diff/context that was already collected by the user or Python tooling, but they must not hide truncation, secret scan failures, quality check failures, missing context, failed reviewers, or unrun reviewers.
+
+### Custom Agent Validation
+
+Custom Agent validation has two layers:
+
+- Custom Agent schema validation checks whether `.agent.md` frontmatter is valid YAML and structurally usable by GitHub / VS Code Custom Agents.
+- Review-only policy validation checks whether this repository's review agents satisfy the local safety requirements.
+
+An omitted `tools` field is not a general GitHub / VS Code Custom Agent schema error. For `copilot-multi-review` review-only agents, however, `tools` must be explicitly declared so the validator can verify that editing and terminal capabilities are not enabled.

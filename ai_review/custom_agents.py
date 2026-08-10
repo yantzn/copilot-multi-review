@@ -15,7 +15,7 @@ class CustomAgentDefinition:
     path: Path
     name: str
     description: str
-    tools: list[str]
+    tools: list[str] | None
     agents: list[str] | str | None
     instructions: str
     metadata: dict[str, object]
@@ -30,7 +30,18 @@ BANNED_REVIEW_TOOLS = {
 }
 
 
-def validate_custom_agents(root: Path | None = None) -> list[CustomAgentDefinition]:
+def validate_custom_agents(
+    root: Path | None = None,
+    *,
+    enforce_review_policy: bool = True,
+) -> list[CustomAgentDefinition]:
+    definitions = validate_custom_agent_schema(root)
+    if enforce_review_policy:
+        validate_review_agent_policy(definitions)
+    return definitions
+
+
+def validate_custom_agent_schema(root: Path | None = None) -> list[CustomAgentDefinition]:
     root = root or Path.cwd()
     agents_dir = root / ".github" / "agents"
     if not agents_dir.is_dir():
@@ -52,6 +63,23 @@ def validate_custom_agents(root: Path | None = None) -> list[CustomAgentDefiniti
     return definitions
 
 
+def validate_review_agent_policy(definitions: list[CustomAgentDefinition]) -> None:
+    for definition in definitions:
+        tools = definition.tools
+        if tools is None:
+            raise CustomAgentValidationError(
+                f"{definition.path}: review-only policy requires explicit tools to limit agent capabilities"
+            )
+        if any(_is_banned_tool(tool) for tool in tools):
+            raise CustomAgentValidationError(
+                f"{definition.path}: review-only policy forbids editing or terminal tools"
+            )
+        if definition.agents is not None and "agent" not in tools:
+            raise CustomAgentValidationError(
+                f"{definition.path}: review-only policy requires the agent tool when agents are configured"
+            )
+
+
 def _load_agent(path: Path) -> CustomAgentDefinition:
     text = path.read_text(encoding="utf-8")
     metadata, instructions = _split_frontmatter(text, path)
@@ -65,10 +93,6 @@ def _load_agent(path: Path) -> CustomAgentDefinition:
         raise CustomAgentValidationError(f"{path}: name must be a non-empty string")
     if not isinstance(description, str) or not description.strip():
         raise CustomAgentValidationError(f"{path}: description must be a non-empty string")
-    if any(_is_banned_tool(tool) for tool in tools):
-        raise CustomAgentValidationError(f"{path}: review agents must not enable editing or terminal tools")
-    if agents is not None and "agent" not in tools:
-        raise CustomAgentValidationError(f"{path}: agents field requires the agent tool")
     if agents is not None and not _valid_agents_value(agents):
         raise CustomAgentValidationError(f"{path}: agents must be '*', [], or a list of non-empty strings")
     if not instructions.strip():
@@ -109,9 +133,9 @@ def _split_frontmatter(text: str, path: Path) -> tuple[dict[str, object], str]:
     return parsed, instructions
 
 
-def _normalize_tools(value: object, path: Path) -> list[str]:
+def _normalize_tools(value: object, path: Path) -> list[str] | None:
     if value is None:
-        raise CustomAgentValidationError(f"{path}: review agents must explicitly declare tools")
+        return None
     if isinstance(value, str):
         if not value.strip():
             raise CustomAgentValidationError(f"{path}: tools must not contain empty strings")

@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from ai_review.custom_agents import CustomAgentValidationError, validate_custom_agents
+from ai_review.custom_agents import (
+    CustomAgentValidationError,
+    validate_custom_agent_schema,
+    validate_custom_agents,
+)
 
 
 def write_agent(root: Path, content: str, name: str = "review-orchestrator.agent.md") -> Path:
@@ -67,18 +71,34 @@ Instructions
     assert definitions[0].tools == ["search"]
 
 
-def test_missing_tools_are_rejected_for_review_only_agents(tmp_path: Path) -> None:
+def test_missing_tools_are_valid_custom_agent_schema(tmp_path: Path) -> None:
     write_agent(
         tmp_path,
         """---
-name: Read Only Reviewer
+name: Generic Agent
+description: Generic custom agent.
+---
+Instructions
+""",
+    )
+
+    definitions = validate_custom_agent_schema(tmp_path)
+
+    assert definitions[0].tools is None
+
+
+def test_missing_tools_are_rejected_by_review_only_policy(tmp_path: Path) -> None:
+    write_agent(
+        tmp_path,
+        """---
+name: Review Orchestrator
 description: Coordinate review.
 ---
 Instructions
 """,
     )
 
-    with pytest.raises(CustomAgentValidationError, match="explicitly declare tools"):
+    with pytest.raises(CustomAgentValidationError, match="review-only policy requires explicit tools"):
         validate_custom_agents(tmp_path)
 
 
@@ -194,7 +214,7 @@ Instructions
 """,
     )
 
-    with pytest.raises(CustomAgentValidationError, match="requires the agent tool"):
+    with pytest.raises(CustomAgentValidationError, match="review-only policy requires the agent tool"):
         validate_custom_agents(tmp_path)
 
 
@@ -225,7 +245,7 @@ Instructions
 """,
     )
 
-    with pytest.raises(CustomAgentValidationError, match="must not enable"):
+    with pytest.raises(CustomAgentValidationError, match="review-only policy forbids"):
         validate_custom_agents(tmp_path)
 
 
@@ -241,7 +261,7 @@ Instructions
 """,
     )
 
-    with pytest.raises(CustomAgentValidationError, match="must not enable"):
+    with pytest.raises(CustomAgentValidationError, match="review-only policy forbids"):
         validate_custom_agents(tmp_path)
 
 
