@@ -27,6 +27,108 @@ def test_review_orchestrator_agent_definition_exists_and_is_valid() -> None:
     assert "Final Reviewer" in orchestrator.instructions
     assert "Subagent Result Contract" in orchestrator.instructions
     assert "git push" in orchestrator.instructions
+    assert orchestrator.metadata["argument-hint"]
+
+
+def test_list_tools_are_valid(tmp_path: Path) -> None:
+    write_agent(
+        tmp_path,
+        """---
+name: Review Orchestrator
+description: Coordinate review.
+tools:
+  - search/codebase
+  - agent
+agents: '*'
+---
+Instructions
+""",
+    )
+
+    definitions = validate_custom_agents(tmp_path)
+
+    assert definitions[0].tools == ["search/codebase", "agent"]
+
+
+def test_string_tools_are_normalized(tmp_path: Path) -> None:
+    write_agent(
+        tmp_path,
+        """---
+name: Search Reviewer
+description: Coordinate review.
+tools: search
+---
+Instructions
+""",
+    )
+
+    definitions = validate_custom_agents(tmp_path)
+
+    assert definitions[0].tools == ["search"]
+
+
+def test_missing_tools_are_valid_and_normalized(tmp_path: Path) -> None:
+    write_agent(
+        tmp_path,
+        """---
+name: Read Only Reviewer
+description: Coordinate review.
+---
+Instructions
+""",
+    )
+
+    definitions = validate_custom_agents(tmp_path)
+
+    assert definitions[0].tools == []
+
+
+def test_nested_yaml_is_valid(tmp_path: Path) -> None:
+    write_agent(
+        tmp_path,
+        """---
+name: Review Orchestrator
+description: Coordinate review.
+tools:
+  - agent
+agents: '*'
+handoffs:
+  - label: Final review
+    agent: final-reviewer
+    prompt: Integrate reviewer results.
+---
+Instructions
+""",
+    )
+
+    definitions = validate_custom_agents(tmp_path)
+
+    assert definitions[0].metadata["handoffs"] == [
+        {
+            "label": "Final review",
+            "agent": "final-reviewer",
+            "prompt": "Integrate reviewer results.",
+        }
+    ]
+
+
+def test_unknown_frontmatter_fields_are_allowed(tmp_path: Path) -> None:
+    write_agent(
+        tmp_path,
+        """---
+name: Review Orchestrator
+description: Coordinate review.
+future-field:
+  nested:
+    value: true
+---
+Instructions
+""",
+    )
+
+    definitions = validate_custom_agents(tmp_path)
+
+    assert definitions[0].metadata["future-field"] == {"nested": {"value": True}}
 
 
 def test_architecture_documents_python_and_custom_agent_boundaries() -> None:
@@ -85,13 +187,14 @@ def test_invalid_agent_definition_is_rejected(tmp_path: Path) -> None:
         """---
 name: Review Orchestrator
 description: Coordinate review.
-tools: ['agent']
+tools: ['search/codebase']
+agents: '*'
 ---
 Instructions
 """,
     )
 
-    with pytest.raises(CustomAgentValidationError, match="agents field"):
+    with pytest.raises(CustomAgentValidationError, match="requires the agent tool"):
         validate_custom_agents(tmp_path)
 
 
@@ -123,4 +226,55 @@ Instructions
     )
 
     with pytest.raises(CustomAgentValidationError, match="must not enable"):
+        validate_custom_agents(tmp_path)
+
+
+def test_banned_tool_family_is_rejected(tmp_path: Path) -> None:
+    write_agent(
+        tmp_path,
+        """---
+name: Review Orchestrator
+description: Coordinate review.
+tools: ['terminal/runCommand']
+---
+Instructions
+""",
+    )
+
+    with pytest.raises(CustomAgentValidationError, match="must not enable"):
+        validate_custom_agents(tmp_path)
+
+
+def test_invalid_tools_type_is_rejected(tmp_path: Path) -> None:
+    write_agent(
+        tmp_path,
+        """---
+name: Review Orchestrator
+description: Coordinate review.
+tools:
+  search: true
+---
+Instructions
+""",
+    )
+
+    with pytest.raises(CustomAgentValidationError, match="tools must be"):
+        validate_custom_agents(tmp_path)
+
+
+def test_malformed_yaml_is_rejected(tmp_path: Path) -> None:
+    write_agent(
+        tmp_path,
+        """---
+name: Review Orchestrator
+description: Coordinate review.
+tools:
+  - agent
+  - [broken
+---
+Instructions
+""",
+    )
+
+    with pytest.raises(CustomAgentValidationError, match="YAML frontmatter is invalid"):
         validate_custom_agents(tmp_path)

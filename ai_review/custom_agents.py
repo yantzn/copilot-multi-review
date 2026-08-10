@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-import ast
+
+import yaml
 
 
 class CustomAgentValidationError(RuntimeError):
@@ -17,6 +18,7 @@ class CustomAgentDefinition:
     tools: list[str]
     agents: list[str] | str | None
     instructions: str
+    metadata: dict[str, object]
 
 
 BANNED_REVIEW_TOOLS = {
@@ -56,19 +58,17 @@ def _load_agent(path: Path) -> CustomAgentDefinition:
 
     name = metadata.get("name") or path.name.removesuffix(".agent.md")
     description = metadata.get("description")
-    tools = metadata.get("tools", [])
+    tools = _normalize_tools(metadata.get("tools"), path)
     agents = metadata.get("agents")
 
     if not isinstance(name, str) or not name.strip():
         raise CustomAgentValidationError(f"{path}: name must be a non-empty string")
     if not isinstance(description, str) or not description.strip():
         raise CustomAgentValidationError(f"{path}: description must be a non-empty string")
-    if not isinstance(tools, list) or not all(isinstance(item, str) and item.strip() for item in tools):
-        raise CustomAgentValidationError(f"{path}: tools must be a list of non-empty strings")
-    if any(tool in BANNED_REVIEW_TOOLS for tool in tools):
+    if any(_is_banned_tool(tool) for tool in tools):
         raise CustomAgentValidationError(f"{path}: review agents must not enable editing or terminal tools")
-    if "agent" in tools and agents is None:
-        raise CustomAgentValidationError(f"{path}: agent tool requires an agents field")
+    if agents is not None and "agent" not in tools:
+        raise CustomAgentValidationError(f"{path}: agents field requires the agent tool")
     if agents is not None and not _valid_agents_value(agents):
         raise CustomAgentValidationError(f"{path}: agents must be '*', [], or a list of non-empty strings")
     if not instructions.strip():
@@ -81,6 +81,7 @@ def _load_agent(path: Path) -> CustomAgentDefinition:
         tools=tools,
         agents=agents,
         instructions=instructions.strip(),
+        metadata=metadata,
     )
 
 
@@ -94,51 +95,37 @@ def _split_frontmatter(text: str, path: Path) -> tuple[dict[str, object], str]:
     except StopIteration as exc:
         raise CustomAgentValidationError(f"{path}: YAML frontmatter is not closed") from exc
 
-    metadata = _parse_simple_yaml(lines[1:end], path)
+    frontmatter = "\n".join(lines[1:end])
+    try:
+        parsed = yaml.safe_load(frontmatter) if frontmatter.strip() else {}
+    except yaml.YAMLError as exc:
+        raise CustomAgentValidationError(f"{path}: YAML frontmatter is invalid: {exc}") from exc
+    if parsed is None:
+        parsed = {}
+    if not isinstance(parsed, dict):
+        raise CustomAgentValidationError(f"{path}: YAML frontmatter must be a mapping")
+
     instructions = "\n".join(lines[end + 1 :])
-    return metadata, instructions
+    return parsed, instructions
 
 
-def _parse_simple_yaml(lines: list[str], path: Path) -> dict[str, object]:
-    metadata: dict[str, object] = {}
-    current_key: str | None = None
-
-    for raw in lines:
-        if not raw.strip() or raw.lstrip().startswith("#"):
-            continue
-        if raw.startswith("  - "):
-            if current_key is None:
-                raise CustomAgentValidationError(f"{path}: list item without a key")
-            existing = metadata.setdefault(current_key, [])
-            if not isinstance(existing, list):
-                raise CustomAgentValidationError(f"{path}: mixed scalar/list value for {current_key}")
-            existing.append(_parse_scalar(raw[4:].strip()))
-            continue
-        if raw.startswith(" "):
-            raise CustomAgentValidationError(f"{path}: unsupported YAML indentation")
-        if ":" not in raw:
-            raise CustomAgentValidationError(f"{path}: invalid frontmatter line")
-
-        key, value = raw.split(":", 1)
-        key = key.strip()
-        value = value.strip()
-        if not key:
-            raise CustomAgentValidationError(f"{path}: empty frontmatter key")
-        current_key = key
-        metadata[key] = [] if value == "" else _parse_scalar(value)
-
-    return metadata
+def _normalize_tools(value: object, path: Path) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        if not value.strip():
+            raise CustomAgentValidationError(f"{path}: tools must not contain empty strings")
+        return [value.strip()]
+    if isinstance(value, list) and all(isinstance(item, str) and item.strip() for item in value):
+        return [item.strip() for item in value]
+    raise CustomAgentValidationError(f"{path}: tools must be a string or a list of non-empty strings")
 
 
-def _parse_scalar(value: str) -> object:
-    if value in {"[]", "{}"} or value.startswith("[") or value.startswith("{"):
-        try:
-            return ast.literal_eval(value)
-        except (SyntaxError, ValueError):
-            return value
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-        return value[1:-1]
-    return value
+def _is_banned_tool(tool: str) -> bool:
+    canonical = tool.strip()
+    lowered = canonical.lower()
+    banned = {item.lower() for item in BANNED_REVIEW_TOOLS}
+    return lowered in banned or any(lowered.startswith(f"{item}/") for item in banned)
 
 
 def _valid_agents_value(value: object) -> bool:
