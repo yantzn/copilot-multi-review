@@ -65,7 +65,7 @@ Delegate to these Custom Agent subagents by exact agent name:
 - `Devil Advocate`: hidden assumptions, fail-open behavior, unexpected user paths, and migration risks.
 - `Final Reviewer`: final synthesis, duplicate finding merge, provenance retention, severity conflict resolution, reviewer conflict detection, incomplete review reporting, and AI decision candidate generation.
 
-The existing Python ReviewEngine continues to use its own logical reviewer prompts under `agents/*.md`; do not remove or replace that path. Do not invent results for missing subagents. If a needed specialist subagent is unavailable, mark that reviewer as `missing` or `not_run` and explain the impact.
+The Python Review Controller prepares safe context and validates the returned Final Reviewer result. Deprecated legacy Python prompts under `agents/*.md` may exist only for migration compatibility and are not the standard orchestration path. Do not invent results for missing subagents. If a needed specialist subagent is unavailable, mark that reviewer as `missing` or `not_run` and explain the impact.
 
 ## Delegation Context Contract
 
@@ -79,7 +79,7 @@ When delegating to a specialist subagent, provide the relevant available context
 - `diff`: the exact diff/context available to you.
 - `review_scope`: the specialist review scope requested.
 - `constraints`: safety and execution constraints, including review-only behavior.
-- `known_risks`: risks already identified by the user, ReviewEngine, or prior reviewers.
+- `known_risks`: risks already identified by the user or deterministic Python preflight checks.
 - `truncation_status`: whether diff/context is complete, truncated, summarized, or unknown.
 - `secret_scan_status`: whether secret scanning passed, failed, blocked, or was not run.
 - `quality_check_status`: whether quality checks passed, failed, were skipped, or are unknown.

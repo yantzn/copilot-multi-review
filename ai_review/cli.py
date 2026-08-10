@@ -66,6 +66,12 @@ def build_parser() -> argparse.ArgumentParser:
     ], help="単独実行するエージェント")
     review.add_argument("--no-agents", action="store_true", help="Copilotエージェントを起動せず収集結果だけ表示します")
     review.add_argument(
+        "--execution-mode",
+        choices=["subagent", "legacy"],
+        default="subagent",
+        help="Review execution mode. Default is subagent; legacy is deprecated Python serial agent execution.",
+    )
+    review.add_argument(
         "--target",
         required=True,
         choices=["base", "uncommitted", "staged", "commits", "file"],
@@ -148,6 +154,10 @@ def handle_review(args: argparse.Namespace) -> int:
                 max_concurrent_copilot_processes=0,
             )
         else:
+            if args.agent and args.execution_mode == "subagent":
+                print("--agent is legacy-only and is ignored by the standard subagent execution mode.", file=sys.stderr)
+            if args.execution_mode == "legacy":
+                print("legacy execution mode is deprecated and kept only for migration compatibility.", file=sys.stderr)
             engine_result = run_review_engine(
                 EngineRequest(
                     repository=repository,
@@ -157,6 +167,7 @@ def handle_review(args: argparse.Namespace) -> int:
                     run_id=run_id,
                     agent=args.agent,
                     cancel_file=paths.runtime_root / repository.project_id / "cancel.json",
+                    execution_mode=args.execution_mode,
                 )
             )
         print(f"Final decision: {engine_result.final_decision}")
@@ -166,7 +177,12 @@ def handle_review(args: argparse.Namespace) -> int:
             repository,
             run_id=engine_result.run_id,
             target=args.target,
-            request={"target": args.target, "agent": args.agent, "no_agents": args.no_agents},
+            request={
+                "target": args.target,
+                "agent": args.agent,
+                "no_agents": args.no_agents,
+                "execution_mode": engine_result.execution_mode,
+            },
             diff=diff,
             quality_checks=quality,
             engine_result=engine_result,
@@ -203,6 +219,7 @@ def handle_rerun(args: argparse.Namespace) -> int:
         quality_command=None,
         agent=latest.get("request", {}).get("agent"),
         no_agents=args.no_agents,
+        execution_mode=latest.get("request", {}).get("execution_mode", "subagent"),
     )
     return handle_review(review_args)
 

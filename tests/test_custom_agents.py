@@ -338,11 +338,12 @@ Instructions
 def test_architecture_documents_python_and_custom_agent_boundaries() -> None:
     text = Path("docs/architecture.md").read_text(encoding="utf-8")
 
-    assert "Python ReviewEngine Responsibilities" in text
+    assert "Python Review Controller Responsibilities" in text
     assert "Copilot Custom Agent Responsibilities" in text
     assert "Review Orchestrator" in text
     assert "VS Code Copilot Chat" in text
-    assert "Python ReviewEngine" in text
+    assert "Python Review Controller" in text
+    assert "AI output is untrusted input" in text
     assert "Copilot CLI" in text
     for reviewer in [
         "requirements",

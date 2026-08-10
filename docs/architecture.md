@@ -22,8 +22,11 @@ flowchart TD
   E --> F{"confirmed secret?"}
   F -->|yes| G["BLOCKED without Copilot call"]
   F -->|no| H["Acquire project lock"]
-  H --> I["Run 9 agents serially"]
-  I --> J["Save reports/history/latest"]
+  H --> I["Build sanitized review context"]
+  I --> O["Copilot Review Orchestrator / Subagents"]
+  O --> V["Validate Final Reviewer AgentResult"]
+  V --> R["Python deterministic decision"]
+  R --> J["Save reports/history/latest"]
   J --> K["Release own lock"]
 ```
 
@@ -46,9 +49,35 @@ Base branch priority:
 
 No automatic fetch is performed.
 
-## Agents
+## Review Controller and Agents
 
-The engine runs these agents in a plain `for` loop:
+The standard execution mode is `subagent`.
+
+Python acts as the Review Controller:
+
+1. resolve the repository and review target
+2. collect diff and context
+3. run quality checks
+4. scan secrets before any Copilot invocation
+5. enforce preflight blocking
+6. manage run ID, runtime files, locks, cancellation, and timeouts where Python can control them
+7. build sanitized review context
+8. invoke the Copilot Review Orchestrator once
+9. validate the untrusted Final Reviewer `AgentResult`
+10. reconcile AI and rule-based decisions with the safer result
+11. persist `reports/`, `history/`, and `latest`
+
+Copilot Custom Agents perform review and synthesis:
+
+- Review Orchestrator delegates only.
+- The eight Specialist Reviewers analyze independently.
+- Specialist Reviewers do not receive `previous_results`, `prior_findings`, `other_reviewer_results`, or equivalent cross-reviewer state.
+- Only the Final Reviewer receives all specialist results and reviewer states.
+- The Final Reviewer returns an AI-side decision candidate, not the final authority.
+
+AI output is untrusted input. Python must validate it before decision or persistence.
+
+Deprecated `legacy` mode keeps the old Python-driven serial runner temporarily:
 
 1. requirements
 2. correctness
@@ -60,7 +89,7 @@ The engine runs these agents in a plain `for` loop:
 8. devil_advocate
 9. final
 
-The implementation does not use thread pools, parallel subprocesses, or `asyncio.gather`.
+Legacy mode is not a co-equal standard implementation. It exists only for migration compatibility through `--execution-mode legacy`. Removal is allowed after downstream CLI users no longer need Python to invoke `agents/*.md`; the responsibilities removed will be specialist AI invocation, reviewer result handoff, and Python-side Final Reviewer invocation.
 
 ## Persistence
 
@@ -70,7 +99,7 @@ Locks are acquired with exclusive file creation and released only when owner and
 
 ## Copilot Custom Agent Review Orchestration
 
-Issue #24 adds a VS Code / GitHub Copilot Custom Agent entry point without replacing the Python ReviewEngine. The two review paths are intentionally separate so the project can migrate in stages.
+Issue #27 makes the Copilot Custom Agent orchestration the standard AI review path. Python remains the deterministic safety boundary and persistence controller.
 
 The Custom Agent path is for human-facing orchestration in Copilot Chat:
 
@@ -125,15 +154,19 @@ flowchart TD
 
 Only the Final Reviewer sees all specialist reviewer results. Specialist reviewers receive the same primary target context and must not receive other reviewers' findings, summaries, severities, or conclusions. The Final Reviewer receives specialist results, reviewer states, truncation status, scan/check status, and minimal target metadata for integration; it must not redo detailed specialist review from the original diff.
 
-The existing CLI path remains the source of the current automated local review flow:
+The current automated local review flow is:
 
 ```mermaid
 flowchart TD
-  A["VS Code launch / CLI"] --> B["Python ReviewEngine"]
-  B --> C["Copilot CLI"]
+  A["VS Code launch / CLI"] --> B["Python Review Controller"]
+  B --> C["safe sanitized context"]
+  C --> D["Copilot Review Orchestrator"]
+  D --> E["Specialist Subagents"]
+  E --> F["Final Reviewer"]
+  F --> G["Python validation / deterministic decision / persistence"]
 ```
 
-### Python ReviewEngine Responsibilities
+### Python Review Controller Responsibilities
 
 The Python side remains responsible for:
 
@@ -148,11 +181,12 @@ The Python side remains responsible for:
 - report and history persistence
 - CLI commands
 - VS Code launch integration
-- Copilot CLI process startup
-- the existing serial reviewer execution flow
+- Copilot CLI process startup for the orchestrator
+- AgentResult schema validation
+- fail-safe reconciliation
 - safety constraints for local execution
 
-The Python ReviewEngine is not removed or replaced by Custom Agents in this issue.
+The Python Review Controller is not a specialist reviewer. It prepares, validates, decides, and persists.
 
 ### Copilot Custom Agent Responsibilities
 

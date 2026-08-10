@@ -18,6 +18,7 @@ from ai_review.review_engine import (
     EngineRequest,
     ReviewEngineError,
     parse_agent_response,
+    parse_subagent_final_response,
     run_review_engine,
 )
 
@@ -31,17 +32,21 @@ class FakeClient(CopilotClient):
     def run_prompt(self, prompt: str, *, timeout_seconds: int) -> str:
         payload = json.loads(prompt.split("PAYLOAD_JSON\n", 1)[1].splitlines()[0])
         self.payloads.append(payload)
-        self.calls.append(payload["agent"])
+        call = payload.get("agent", "review-orchestrator")
+        self.calls.append(call)
         decision = self.decisions.pop(0) if self.decisions else "APPROVE"
         return json.dumps(
             {
                 "run_id": payload["run_id"],
-                "agent": payload["agent"],
+                "agent": "final" if call == "review-orchestrator" else call,
                 "provider": "github-copilot-cli",
                 "schema_version": "0.1.0",
                 "decision": decision,
                 "findings": [],
                 "summary": "ok",
+                "reviewer_states": {agent: "completed" for agent in AGENT_ORDER[:-1]}
+                if call == "review-orchestrator"
+                else None,
             }
         )
 
@@ -75,11 +80,32 @@ def request_for(repo: Path, *, agent: str | None = None, run_id: str = "run-1") 
     )
 
 
-def test_runs_nine_agents_serially(tmp_path: Path) -> None:
+def test_standard_path_invokes_orchestrator_once_not_nine_agents(tmp_path: Path) -> None:
     repo = init_repo(tmp_path / "repo")
     client = FakeClient()
 
     result = run_review_engine(request_for(repo), client)
+
+    assert client.calls == ["review-orchestrator"]
+    assert result.max_concurrent_copilot_processes == 1
+    assert result.execution_mode == "subagent"
+    assert all(state == "completed" for state in result.agent_states.values())
+
+
+def test_legacy_runs_nine_agents_serially(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path / "repo")
+    client = FakeClient()
+    request = request_for(repo)
+    request = EngineRequest(
+        repository=request.repository,
+        diff=request.diff,
+        quality_checks=request.quality_checks,
+        target=request.target,
+        run_id=request.run_id,
+        execution_mode="legacy",
+    )
+
+    result = run_review_engine(request, client)
 
     assert client.calls == [
         "requirements",
@@ -92,14 +118,23 @@ def test_runs_nine_agents_serially(tmp_path: Path) -> None:
         "devil_advocate",
         "final",
     ]
-    assert result.max_concurrent_copilot_processes == 1
-    assert all(state == "completed" for state in result.agent_states.values())
+    assert result.execution_mode == "legacy"
 
 
-def test_single_agent_run_skips_others(tmp_path: Path) -> None:
+def test_legacy_single_agent_run_skips_others(tmp_path: Path) -> None:
     repo = init_repo(tmp_path / "repo")
     client = FakeClient()
-    result = run_review_engine(request_for(repo, agent="security"), client)
+    request = request_for(repo, agent="security")
+    request = EngineRequest(
+        repository=request.repository,
+        diff=request.diff,
+        quality_checks=request.quality_checks,
+        target=request.target,
+        run_id=request.run_id,
+        agent=request.agent,
+        execution_mode="legacy",
+    )
+    result = run_review_engine(request, client)
 
     assert result.agent_states["security"] == "completed"
     assert result.agent_states["final"] == "completed"
@@ -107,46 +142,21 @@ def test_single_agent_run_skips_others(tmp_path: Path) -> None:
     assert client.calls == ["security", "final"]
 
 
-def test_single_specialist_run_still_sends_result_to_final(tmp_path: Path) -> None:
-    repo = init_repo(tmp_path / "repo")
-    client = FakeClient()
-
-    run_review_engine(request_for(repo, agent="security"), client)
-
-    final_payload = client.payloads[-1]
-    assert final_payload["agent"] == "final"
-    assert [item["agent"] for item in final_payload["specialist_results"]] == ["security"]
-    assert final_payload["reviewer_states"] == {"security": "completed"}
-
-
-def test_final_agent_receives_all_specialist_results(tmp_path: Path) -> None:
+def test_standard_orchestrator_receives_sanitized_context_without_previous_results(tmp_path: Path) -> None:
     repo = init_repo(tmp_path / "repo")
     client = FakeClient()
 
     run_review_engine(request_for(repo), client)
 
-    final_payload = client.payloads[-1]
-    assert final_payload["agent"] == "final"
-    assert "specialist_results" in final_payload
-    assert [item["agent"] for item in final_payload["specialist_results"]] == AGENT_ORDER[:-1]
-    assert set(final_payload["reviewer_states"]) == set(AGENT_ORDER[:-1])
-    assert final_payload["truncation_status"] == "complete"
-    assert final_payload["quality_check_status"] == [{"name": "quality", "status": "skipped", "returncode": None}]
-    assert "previous_results" not in final_payload
-    assert "diff" not in final_payload
-
-
-def test_non_final_agents_keep_limited_previous_results(tmp_path: Path) -> None:
-    repo = init_repo(tmp_path / "repo")
-    client = FakeClient()
-
-    run_review_engine(request_for(repo), client)
-
-    final_payload = client.payloads[-1]
-    devil_payload = client.payloads[-2]
-    assert [item["agent"] for item in devil_payload["previous_results"]] == ["performance", "operations"]
-    assert "specialist_results" not in devil_payload
-    assert len(final_payload["specialist_results"]) == 8
+    payload = client.payloads[-1]
+    assert payload["execution_mode"] == "subagent"
+    assert payload["review_target"] == "base"
+    assert payload["truncation_status"] == "complete"
+    assert payload["secret_scan_status"] == "passed"
+    assert payload["quality_check_status"] == [{"name": "quality", "status": "skipped", "returncode": None}]
+    forbidden = {"previous_results", "prior_findings", "other_reviewer_results"}
+    assert forbidden.isdisjoint(payload)
+    assert payload["constraints"]["no_previous_results_for_specialists"] is True
 
 
 def test_python_final_prompt_documents_integration_contract() -> None:
@@ -243,16 +253,17 @@ def test_major_finding_forces_changes_required(tmp_path: Path) -> None:
     class MajorClient(FakeClient):
         def run_prompt(self, prompt: str, *, timeout_seconds: int) -> str:
             payload = json.loads(prompt.split("PAYLOAD_JSON\n", 1)[1].splitlines()[0])
-            self.calls.append(payload["agent"])
+            self.calls.append(payload.get("agent", "review-orchestrator"))
             return json.dumps(
                 {
                     "run_id": payload["run_id"],
-                    "agent": payload["agent"],
+                    "agent": "final",
                     "provider": "github-copilot-cli",
                     "schema_version": "0.1.0",
                     "decision": "APPROVE",
                     "findings": [{"severity": "Major", "message": "bug"}],
                     "summary": "bug",
+                    "reviewer_states": {agent: "completed" for agent in AGENT_ORDER[:-1]},
                 }
             )
 
@@ -279,7 +290,7 @@ def test_failed_quality_check_forces_inconclusive_even_when_ai_approves(tmp_path
     assert result.final_decision == "INCONCLUSIVE"
 
 
-def test_schema_mismatch_retries_safely(tmp_path: Path) -> None:
+def test_schema_mismatch_is_fail_safe_not_approve(tmp_path: Path) -> None:
     repo = init_repo(tmp_path / "repo")
 
     class RetryClient(FakeClient):
@@ -290,10 +301,11 @@ def test_schema_mismatch_retries_safely(tmp_path: Path) -> None:
             return super().run_prompt(prompt, timeout_seconds=timeout_seconds)
 
     client = RetryClient()
-    result = run_review_engine(request_for(repo, agent="security"), client)
+    result = run_review_engine(request_for(repo), client)
 
-    assert result.agent_states["security"] == "completed"
-    assert client.calls == ["bad", "security", "final"]
+    assert result.agent_states["final"] == "failed"
+    assert client.calls == ["bad"]
+    assert result.final_decision == "INCONCLUSIVE"
 
 
 def test_timeout_marks_agent_failed(tmp_path: Path) -> None:
@@ -305,7 +317,7 @@ def test_timeout_marks_agent_failed(tmp_path: Path) -> None:
 
     result = run_review_engine(request_for(repo, agent="security"), TimeoutClient())
 
-    assert result.agent_states["security"] == "failed"
+    assert result.agent_states["final"] == "failed"
     assert result.final_decision == "INCONCLUSIVE"
 
 
@@ -336,8 +348,56 @@ def test_rate_limit_or_auth_failure_marks_failed(tmp_path: Path) -> None:
 
     result = run_review_engine(request_for(repo, agent="security"), FailingClient())
 
+    assert result.agent_states["final"] == "failed"
+    assert result.final_decision == "INCONCLUSIVE"
+
+
+def test_reviewer_failure_is_not_success(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path / "repo")
+
+    class ReviewerFailureClient(FakeClient):
+        def run_prompt(self, prompt: str, *, timeout_seconds: int) -> str:
+            payload = json.loads(prompt.split("PAYLOAD_JSON\n", 1)[1].splitlines()[0])
+            self.calls.append(payload.get("agent", "review-orchestrator"))
+            states = {agent: "completed" for agent in AGENT_ORDER[:-1]}
+            states["security"] = "failed"
+            return json.dumps(
+                {
+                    "run_id": payload["run_id"],
+                    "agent": "final",
+                    "provider": "github-copilot-cli",
+                    "schema_version": "0.1.0",
+                    "status": "inconclusive",
+                    "decision": "APPROVE",
+                    "findings": [],
+                    "summary": "security reviewer failed",
+                    "reviewer_states": states,
+                    "incomplete_review": True,
+                }
+            )
+
+    result = run_review_engine(request_for(repo), ReviewerFailureClient())
+
     assert result.agent_states["security"] == "failed"
     assert result.final_decision == "INCONCLUSIVE"
+
+
+def test_subagent_final_adapter_rejects_unknown_top_level_field() -> None:
+    raw = json.dumps(
+        {
+            "run_id": "r",
+            "agent": "final",
+            "provider": "github-copilot-cli",
+            "schema_version": "0.1.0",
+            "decision": "APPROVE",
+            "findings": [],
+            "summary": "ok",
+            "ambiguous": True,
+        }
+    )
+
+    with pytest.raises(AgentSchemaError):
+        parse_subagent_final_response(raw, run_id="r")
 
 
 @pytest.mark.parametrize(
