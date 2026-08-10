@@ -150,6 +150,7 @@ def save_review_result(
         "truncated": diff.truncated,
         "quality_checks": [asdict(item) for item in quality_checks],
         "agent_states": engine_result.agent_states,
+        "execution_mode": engine_result.execution_mode,
         "copilot_cli_version": copilot_version,
         "run_id": run_id,
         "started_at": now_iso(),
@@ -160,6 +161,7 @@ def save_review_result(
         "project_id": repository.project_id,
         "decision": engine_result.final_decision,
         "max_concurrent_copilot_processes": engine_result.max_concurrent_copilot_processes,
+        "execution_mode": engine_result.execution_mode,
     }
     (history_dir / "run.json").write_text(json.dumps(run_json, ensure_ascii=False, indent=2), encoding="utf-8")
     (history_dir / "final.json").write_text(json.dumps(final_json, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -209,6 +211,7 @@ def _render_report(run_json: dict, final_json: dict) -> str:
             f"- run_id: {run_json['run_id']}",
             f"- target: {run_json['target']}",
             f"- decision: {final_json['decision']}",
+            f"- execution_mode: {final_json.get('execution_mode', 'unknown')}",
             f"- changed files: {run_json['changed_file_count']}",
             f"- diff lines: {run_json['diff_line_count']}",
             f"- truncated: {run_json['truncated']}",

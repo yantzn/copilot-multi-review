@@ -16,6 +16,24 @@ from .repository import RepositoryContext
 from .secrets import scan_diff_for_secrets
 
 
+SPECIALIST_AGENTS = [agent for agent in AGENT_ORDER if agent != "final"]
+VALID_EXECUTION_MODES = {"subagent", "legacy"}
+VALID_REVIEWER_STATES = {
+    "pending",
+    "running",
+    "delegated",
+    "completed",
+    "failed",
+    "missing",
+    "skipped",
+    "not_run",
+    "blocked",
+    "inconclusive",
+    "cancelled",
+}
+INCOMPLETE_REVIEWER_STATES = VALID_REVIEWER_STATES - {"completed"}
+
+
 class ReviewEngineError(RuntimeError):
     pass
 
@@ -42,6 +60,7 @@ class EngineRequest:
     agent: str | None = None
     timeout_seconds: int = 120
     cancel_file: Path | None = None
+    execution_mode: str = "subagent"
 
 
 @dataclass(frozen=True)
@@ -52,6 +71,7 @@ class EngineResult:
     agent_results: list[AgentResult]
     final_decision: str
     max_concurrent_copilot_processes: int
+    execution_mode: str = "subagent"
 
 
 class CopilotClient:
@@ -80,20 +100,83 @@ class CopilotClient:
 
 
 def run_review_engine(request: EngineRequest, client: CopilotClient | None = None) -> EngineResult:
+    """Run the standard Python Review Controller path.
+
+    Python prepares safe review context, invokes the Copilot Review Orchestrator
+    once, validates the untrusted Final Reviewer result, reconciles it with
+    deterministic rules, and returns data ready for persistence.
+    """
+
+    if request.execution_mode == "legacy":
+        return run_legacy_review_engine(request, client)
+    if request.execution_mode not in VALID_EXECUTION_MODES:
+        raise ReviewEngineError(f"unknown execution mode: {request.execution_mode}")
+    if request.agent and request.agent not in AGENT_ORDER:
+        raise ReviewEngineError(f"unknown agent: {request.agent}")
+
     client = client or CopilotClient()
-    secret_scan = scan_diff_for_secrets(request.diff)
-    if secret_scan.blocked:
-        return EngineResult(
-            run_id=request.run_id,
-            provider=client.provider,
-            agent_states={agent: "skipped" for agent in AGENT_ORDER},
-            agent_results=[],
-            final_decision="BLOCKED",
-            max_concurrent_copilot_processes=0,
-        )
+    blocked = _preflight_blocked_result(request, provider=client.provider, execution_mode="subagent")
+    if blocked:
+        return blocked
+    if _is_cancelled(request.cancel_file):
+        raise AgentCancelledError(f"review was cancelled before Copilot invocation: {request.run_id}")
+
+    states = {agent: "delegated" for agent in SPECIALIST_AGENTS}
+    states["final"] = "pending"
+    results: list[AgentResult] = []
+    failed = False
+    max_concurrent = 0
+
+    try:
+        states["final"] = "running"
+        max_concurrent = 1
+        raw = client.run_prompt(_build_orchestrator_prompt(request), timeout_seconds=request.timeout_seconds)
+        final_result = parse_subagent_final_response(raw, run_id=request.run_id)
+        results.append(final_result)
+        states["final"] = final_result.status
+        states.update(_normalize_reviewer_states(final_result.reviewer_states))
+        failed = final_result.status in {"failed", "blocked", "inconclusive"} or _has_incomplete_reviewer_state(states)
+    except subprocess.TimeoutExpired:
+        states["final"] = "failed"
+        failed = True
+        results.append(_failed_result(request.run_id, "final", "timeout"))
+    except (AgentSchemaError, AgentRunIdMismatchError, ReviewEngineError):
+        states["final"] = "failed"
+        failed = True
+        results.append(_failed_result(request.run_id, "final", "failed"))
+
+    return _reconcile_result(
+        request,
+        provider=client.provider,
+        states=states,
+        results=results,
+        failed=failed,
+        max_concurrent=max_concurrent,
+        execution_mode="subagent",
+    )
+
+
+def run_legacy_review_engine(request: EngineRequest, client: CopilotClient | None = None) -> EngineResult:
+    """Deprecated Python-driven serial reviewer runner.
+
+    This path exists only for migration compatibility. New code must use the
+    default `subagent` execution mode, where Python prepares, validates,
+    decides, and persists while Copilot Custom Agents review and synthesize.
+
+    Removal condition: delete this path after downstream CLI users no longer
+    require Python to invoke the old logical prompts under `agents/*.md`.
+    Removed responsibilities will be the 8 specialist reviewer invocations,
+    AI specialist judgment generation, Python-side reviewer result handoff, and
+    Python-side Final Reviewer invocation.
+    """
+
+    client = client or CopilotClient()
+    blocked = _preflight_blocked_result(request, provider=client.provider, execution_mode="legacy")
+    if blocked:
+        return blocked
     selected_agents = _select_agents(request.agent)
     if request.agent and request.agent not in AGENT_ORDER:
-        raise ReviewEngineError(f"未知のエージェントです: {request.agent}")
+        raise ReviewEngineError(f"unknown agent: {request.agent}")
 
     states = {agent: "pending" for agent in AGENT_ORDER}
     results: list[AgentResult] = []
@@ -104,7 +187,7 @@ def run_review_engine(request: EngineRequest, client: CopilotClient | None = Non
     for agent in selected_agents:
         if _is_cancelled(request.cancel_file):
             states[agent] = "cancelled"
-            raise AgentCancelledError(f"レビューがキャンセルされました: {request.run_id}")
+            raise AgentCancelledError(f"review was cancelled: {request.run_id}")
         states[agent] = "running"
         current_concurrent += 1
         max_concurrent = max(max_concurrent, current_concurrent)
@@ -130,6 +213,27 @@ def run_review_engine(request: EngineRequest, client: CopilotClient | None = Non
         if agent not in selected_agents and states[agent] == "pending":
             states[agent] = "skipped"
 
+    return _reconcile_result(
+        request,
+        provider=client.provider,
+        states=states,
+        results=results,
+        failed=failed,
+        max_concurrent=max_concurrent,
+        execution_mode="legacy",
+    )
+
+
+def _reconcile_result(
+    request: EngineRequest,
+    *,
+    provider: str,
+    states: dict[str, str],
+    results: list[AgentResult],
+    failed: bool,
+    max_concurrent: int,
+    execution_mode: str,
+) -> EngineResult:
     ai_decision = results[-1].decision if results else "INCONCLUSIVE"
     rules = rule_based_decision(
         results,
@@ -138,11 +242,27 @@ def run_review_engine(request: EngineRequest, client: CopilotClient | None = Non
     )
     return EngineResult(
         run_id=request.run_id,
-        provider=client.provider,
+        provider=provider,
         agent_states=states,
         agent_results=results,
         final_decision=stricter_decision(rules, ai_decision),
         max_concurrent_copilot_processes=max_concurrent,
+        execution_mode=execution_mode,
+    )
+
+
+def _preflight_blocked_result(request: EngineRequest, *, provider: str, execution_mode: str) -> EngineResult | None:
+    secret_scan = scan_diff_for_secrets(request.diff)
+    if not secret_scan.blocked:
+        return None
+    return EngineResult(
+        run_id=request.run_id,
+        provider=provider,
+        agent_states={agent: "skipped" for agent in AGENT_ORDER},
+        agent_results=[],
+        final_decision="BLOCKED",
+        max_concurrent_copilot_processes=0,
+        execution_mode=execution_mode,
     )
 
 
@@ -162,11 +282,11 @@ def parse_agent_response(raw: str, *, run_id: str, agent: str) -> AgentResult:
     payload = _extract_json(raw)
     _validate_payload(payload)
     if payload["run_id"] != run_id:
-        raise AgentRunIdMismatchError("run_idが一致しません。")
+        raise AgentRunIdMismatchError("run_id does not match")
     if payload["agent"] != agent:
-        raise AgentSchemaError("agentが一致しません。")
+        raise AgentSchemaError("agent does not match")
     if payload["provider"] != "github-copilot-cli":
-        raise AgentSchemaError("providerが一致しません。")
+        raise AgentSchemaError("provider does not match")
     findings = [_parse_finding(item) for item in payload.get("findings", [])]
     return AgentResult(
         run_id=payload["run_id"],
@@ -183,6 +303,12 @@ def parse_agent_response(raw: str, *, run_id: str, agent: str) -> AgentResult:
     )
 
 
+def parse_subagent_final_response(raw: str, *, run_id: str) -> AgentResult:
+    result = parse_agent_response(raw, run_id=run_id, agent="final")
+    _validate_subagent_reviewer_states(result.reviewer_states)
+    return result
+
+
 def _run_agent_with_retry(client: CopilotClient, prompt: str, request: EngineRequest, agent: str) -> AgentResult:
     last_error: AgentSchemaError | AgentRunIdMismatchError | None = None
     for attempt in range(2):
@@ -193,10 +319,10 @@ def _run_agent_with_retry(client: CopilotClient, prompt: str, request: EngineReq
             raise
         except AgentSchemaError as exc:
             last_error = exc
-            prompt += "\n\n前回の応答はSchemaに一致しません。JSON objectのみを返してください。"
+            prompt += "\n\nPrevious response did not match the AgentResult schema. Return only one JSON object."
             if attempt == 1:
                 raise
-    raise last_error or AgentSchemaError("Schema検証に失敗しました。")
+    raise last_error or AgentSchemaError("schema validation failed")
 
 
 def new_run_id() -> str:
@@ -204,43 +330,65 @@ def new_run_id() -> str:
 
 
 def _extract_json(raw: str) -> dict:
+    if not raw.strip():
+        raise AgentSchemaError("Copilot output was empty")
     start = raw.find("{")
     end = raw.rfind("}")
     if start == -1 or end == -1 or end < start:
-        raise AgentSchemaError("Copilot出力からJSONを抽出できません。")
+        raise AgentSchemaError("could not extract JSON object from Copilot output")
     try:
         payload = json.loads(raw[start : end + 1])
     except json.JSONDecodeError as exc:
-        raise AgentSchemaError("Copilot出力JSONが不正です。") from exc
+        raise AgentSchemaError("Copilot output JSON is invalid") from exc
     if not isinstance(payload, dict):
-        raise AgentSchemaError("Copilot出力JSONはobjectである必要があります。")
+        raise AgentSchemaError("Copilot output JSON must be an object")
     return payload
 
 
 def _validate_payload(payload: dict) -> None:
+    allowed_top_level = {
+        "run_id",
+        "agent",
+        "provider",
+        "schema_version",
+        "status",
+        "decision",
+        "findings",
+        "summary",
+        "reviewer_states",
+        "conflicts",
+        "incomplete_review",
+    }
+    unknown = set(payload) - allowed_top_level
+    if unknown:
+        raise AgentSchemaError(f"unknown top-level fields: {', '.join(sorted(unknown))}")
     required = {"run_id", "agent", "provider", "schema_version", "decision", "findings", "summary"}
     missing = required - payload.keys()
     if missing:
-        raise AgentSchemaError(f"必須キーが不足しています: {', '.join(sorted(missing))}")
+        raise AgentSchemaError(f"missing required fields: {', '.join(sorted(missing))}")
     if payload["decision"] not in {"APPROVE", "APPROVE_WITH_NOTES", "CHANGES_REQUIRED", "BLOCKED", "INCONCLUSIVE"}:
-        raise AgentSchemaError("decisionが不正です。")
+        raise AgentSchemaError("decision is invalid")
     if not isinstance(payload["findings"], list):
-        raise AgentSchemaError("findingsは配列である必要があります。")
+        raise AgentSchemaError("findings must be an array")
     if "status" in payload and payload["status"] not in {"completed", "inconclusive", "blocked", "failed"}:
         raise AgentSchemaError("status is invalid")
-    if "reviewer_states" in payload and not isinstance(payload["reviewer_states"], dict):
-        raise AgentSchemaError("reviewer_states must be an object")
-    if "conflicts" in payload and not isinstance(payload["conflicts"], list):
-        raise AgentSchemaError("conflicts must be an array")
-    if "incomplete_review" in payload and not isinstance(payload["incomplete_review"], bool):
-        raise AgentSchemaError("incomplete_review must be a boolean")
+    if "reviewer_states" in payload and payload["reviewer_states"] is not None and not isinstance(
+        payload["reviewer_states"], dict
+    ):
+        raise AgentSchemaError("reviewer_states must be an object or null")
+    if "conflicts" in payload and payload["conflicts"] is not None and not isinstance(payload["conflicts"], list):
+        raise AgentSchemaError("conflicts must be an array or null")
+    if "incomplete_review" in payload and payload["incomplete_review"] is not None and not isinstance(
+        payload["incomplete_review"], bool
+    ):
+        raise AgentSchemaError("incomplete_review must be a boolean or null")
     for finding in payload["findings"]:
         if not isinstance(finding, dict):
-            raise AgentSchemaError("findingはobjectである必要があります。")
+            raise AgentSchemaError("finding must be an object")
         if finding.get("severity") not in {"Critical", "Major", "Minor", "Info"}:
-            raise AgentSchemaError("finding severityが不正です。")
+            raise AgentSchemaError("finding severity is invalid")
         if not isinstance(finding.get("message"), str) or not finding.get("message", "").strip():
-            raise AgentSchemaError("finding messageが不正です。")
+            raise AgentSchemaError("finding message is invalid")
 
 
 def _parse_finding(item: dict) -> Finding:
@@ -255,13 +403,12 @@ def _build_prompt(request: EngineRequest, agent: str, previous: list[AgentResult
     prompt_path = Path(__file__).resolve().parent.parent / "agents" / f"{agent}.md"
     prompt = prompt_path.read_text(encoding="utf-8")
     payload = _build_final_prompt_payload(request, previous) if agent == "final" else _build_agent_prompt_payload(
-        request, agent, previous
+        request, agent
     )
-    return prompt + "\n\nJSONで回答してください。\nPAYLOAD_JSON\n" + json.dumps(payload, ensure_ascii=False)
+    return prompt + "\n\nReturn only one JSON object.\nPAYLOAD_JSON\n" + json.dumps(payload, ensure_ascii=False)
 
 
-def _build_agent_prompt_payload(request: EngineRequest, agent: str, previous: list[AgentResult]) -> dict[str, object]:
-    previous_summary = [asdict(item) for item in previous[-2:]]
+def _build_agent_prompt_payload(request: EngineRequest, agent: str) -> dict[str, object]:
     return {
         "run_id": request.run_id,
         "agent": agent,
@@ -271,7 +418,57 @@ def _build_agent_prompt_payload(request: EngineRequest, agent: str, previous: li
         "diff_line_count": request.diff.diff_line_count,
         "truncated": request.diff.truncated,
         "quality_checks": [asdict(item) for item in request.quality_checks],
-        "previous_results": previous_summary,
+        "diff": request.diff.diff_text,
+    }
+
+
+def _build_orchestrator_prompt(request: EngineRequest) -> str:
+    prompt_path = Path(__file__).resolve().parent.parent / ".github" / "agents" / "review-orchestrator.agent.md"
+    prompt = prompt_path.read_text(encoding="utf-8")
+    payload = _build_orchestrator_payload(request)
+    return prompt + "\n\nReturn only the Final Reviewer AgentResult JSON object.\nPAYLOAD_JSON\n" + json.dumps(
+        payload, ensure_ascii=False
+    )
+
+
+def _build_orchestrator_payload(request: EngineRequest) -> dict[str, object]:
+    return {
+        "run_id": request.run_id,
+        "execution_mode": "subagent",
+        "review_target": request.target,
+        "requested_legacy_agent": request.agent,
+        "repository": {
+            "project_id": request.repository.project_id,
+            "root": str(request.repository.root),
+            "remote_url": request.repository.remote_url,
+            "current_branch": request.repository.current_branch,
+            "head_sha": request.repository.head_sha,
+        },
+        "base_ref": request.repository.base_branch,
+        "head_ref": request.repository.current_branch,
+        "changed_files": {
+            "files": request.diff.changed_files,
+            "changed_file_count": request.diff.changed_file_count,
+            "diff_line_count": request.diff.diff_line_count,
+        },
+        "review_scope": "all specialist reviewers through Review Orchestrator",
+        "constraints": {
+            "python_responsibility": "Prepare, validate, decide, persist",
+            "copilot_responsibility": "Review and synthesize through custom subagents",
+            "ai_output_is_untrusted_input": True,
+            "no_previous_results_for_specialists": True,
+        },
+        "truncation_status": "truncated" if request.diff.truncated else "complete",
+        "secret_scan_status": "passed",
+        "quality_check_status": [
+            {
+                "name": check.name,
+                "status": check.status,
+                "returncode": check.returncode,
+            }
+            for check in request.quality_checks
+        ],
+        "common_output_schema": "schemas/agent-result.schema.json",
         "diff": request.diff.diff_text,
     }
 
@@ -323,6 +520,63 @@ def _failed_result(run_id: str, agent: str, reason: str) -> AgentResult:
         summary=reason,
         status="failed",
     )
+
+
+def _normalize_reviewer_states(reviewer_states: dict[str, str] | None) -> dict[str, str]:
+    if not reviewer_states:
+        return {}
+    normalized: dict[str, str] = {}
+    for agent, state in reviewer_states.items():
+        key = _canonical_agent_key(agent)
+        if key in AGENT_ORDER and isinstance(state, str):
+            normalized[key] = state
+    return normalized
+
+
+def _validate_subagent_reviewer_states(reviewer_states: dict[str, str] | None) -> None:
+    if not reviewer_states:
+        raise AgentSchemaError("subagent final result must include reviewer_states")
+
+    normalized: dict[str, str] = {}
+    unknown_reviewers: list[str] = []
+    invalid_states: list[str] = []
+    for reviewer, state in reviewer_states.items():
+        key = _canonical_agent_key(reviewer)
+        if key not in SPECIALIST_AGENTS:
+            unknown_reviewers.append(reviewer)
+            continue
+        if not isinstance(state, str) or state not in VALID_REVIEWER_STATES:
+            invalid_states.append(f"{reviewer}={state!r}")
+            continue
+        normalized[key] = state
+
+    missing = set(SPECIALIST_AGENTS) - set(normalized)
+    if unknown_reviewers:
+        raise AgentSchemaError(f"unknown reviewer_states reviewers: {', '.join(sorted(unknown_reviewers))}")
+    if invalid_states:
+        raise AgentSchemaError(f"invalid reviewer_states values: {', '.join(sorted(invalid_states))}")
+    if missing:
+        raise AgentSchemaError(f"missing reviewer_states reviewers: {', '.join(sorted(missing))}")
+
+
+def _canonical_agent_key(value: str) -> str:
+    lowered = value.strip().lower().replace("-", "_").replace(" ", "_")
+    mapping = {
+        "requirements_reviewer": "requirements",
+        "correctness_reviewer": "correctness",
+        "security_reviewer": "security",
+        "testing_reviewer": "testing",
+        "maintainability_reviewer": "maintainability",
+        "performance_reviewer": "performance",
+        "operations_reviewer": "operations",
+        "devil_advocate": "devil_advocate",
+        "final_reviewer": "final",
+    }
+    return mapping.get(lowered, lowered)
+
+
+def _has_incomplete_reviewer_state(states: dict[str, str]) -> bool:
+    return any(state in INCOMPLETE_REVIEWER_STATES for agent, state in states.items() if agent != "final")
 
 
 def _is_cancelled(cancel_file: Path | None) -> bool:
