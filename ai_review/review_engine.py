@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from collections import deque
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import subprocess
@@ -10,6 +13,12 @@ import uuid
 from .agents import AGENT_ORDER, AgentResult, Finding, rule_based_decision, stricter_decision
 from .copilot import classify_copilot_error, resolve_copilot_command
 from .diff_collector import DiffSummary
+from .evaluation import (
+    DEFAULT_MAX_PARALLEL_REVIEWERS,
+    ExecutionStrategy,
+    validate_execution_strategy,
+    validate_max_parallel_reviewers,
+)
 from .processes import decode_output
 from .quality import QualityCheckResult
 from .repository import RepositoryContext
@@ -61,6 +70,8 @@ class EngineRequest:
     timeout_seconds: int = 120
     cancel_file: Path | None = None
     execution_mode: str = "subagent"
+    orchestration_strategy: ExecutionStrategy = "native"
+    max_parallel_reviewers: int = DEFAULT_MAX_PARALLEL_REVIEWERS
 
 
 @dataclass(frozen=True)
@@ -72,6 +83,14 @@ class EngineResult:
     final_decision: str
     max_concurrent_copilot_processes: int
     execution_mode: str = "subagent"
+    execution_strategy: str = "native"
+    requested_execution_strategy: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+    duration_ms: int | None = None
+    agent_durations_ms: dict[str, int] | None = None
+    orchestrator_duration_ms: int | None = None
+    final_reviewer_duration_ms: int | None = None
 
 
 class CopilotClient:
@@ -107,8 +126,10 @@ def run_review_engine(request: EngineRequest, client: CopilotClient | None = Non
     deterministic rules, and returns data ready for persistence.
     """
 
+    started_at = _now_iso()
+    started_monotonic = time.monotonic()
     if request.execution_mode == "legacy":
-        return run_legacy_review_engine(request, client)
+        return run_legacy_review_engine(request, client, started_at=started_at, started_monotonic=started_monotonic)
     if request.execution_mode not in VALID_EXECUTION_MODES:
         raise ReviewEngineError(f"unknown execution mode: {request.execution_mode}")
     if request.agent and request.agent not in AGENT_ORDER:
@@ -117,7 +138,16 @@ def run_review_engine(request: EngineRequest, client: CopilotClient | None = Non
     client = client or CopilotClient()
     blocked = _preflight_blocked_result(request, provider=client.provider, execution_mode="subagent")
     if blocked:
-        return blocked
+        return _with_timing(
+            blocked,
+            started_at=started_at,
+            started_monotonic=started_monotonic,
+            agent_durations_ms={},
+            orchestrator_duration_ms=0,
+            final_reviewer_duration_ms=None,
+            execution_strategy="native",
+            requested_execution_strategy="native",
+        )
     if _is_cancelled(request.cancel_file):
         raise AgentCancelledError(f"review was cancelled before Copilot invocation: {request.run_id}")
 
@@ -126,6 +156,7 @@ def run_review_engine(request: EngineRequest, client: CopilotClient | None = Non
     results: list[AgentResult] = []
     failed = False
     max_concurrent = 0
+    orchestrator_started = time.monotonic()
 
     try:
         states["final"] = "running"
@@ -153,10 +184,23 @@ def run_review_engine(request: EngineRequest, client: CopilotClient | None = Non
         failed=failed,
         max_concurrent=max_concurrent,
         execution_mode="subagent",
+        execution_strategy="native",
+        requested_execution_strategy="native",
+        started_at=started_at,
+        started_monotonic=started_monotonic,
+        agent_durations_ms={"final": _elapsed_ms(orchestrator_started)},
+        orchestrator_duration_ms=_elapsed_ms(orchestrator_started),
+        final_reviewer_duration_ms=_elapsed_ms(orchestrator_started),
     )
 
 
-def run_legacy_review_engine(request: EngineRequest, client: CopilotClient | None = None) -> EngineResult:
+def run_legacy_review_engine(
+    request: EngineRequest,
+    client: CopilotClient | None = None,
+    *,
+    started_at: str | None = None,
+    started_monotonic: float | None = None,
+) -> EngineResult:
     """Deprecated Python-driven serial reviewer runner.
 
     This path exists only for migration compatibility. New code must use the
@@ -171,43 +215,74 @@ def run_legacy_review_engine(request: EngineRequest, client: CopilotClient | Non
     """
 
     client = client or CopilotClient()
+    strategy = validate_execution_strategy(request.orchestration_strategy)
+    actual_strategy = _actual_legacy_strategy(strategy)
+    max_parallel_reviewers = validate_max_parallel_reviewers(request.max_parallel_reviewers)
+    started_at = started_at or _now_iso()
+    started_monotonic = started_monotonic or time.monotonic()
     blocked = _preflight_blocked_result(request, provider=client.provider, execution_mode="legacy")
     if blocked:
-        return blocked
+        return _with_timing(
+            blocked,
+            started_at=started_at,
+            started_monotonic=started_monotonic,
+            agent_durations_ms={},
+            orchestrator_duration_ms=0,
+            final_reviewer_duration_ms=None,
+            execution_strategy=actual_strategy,
+            requested_execution_strategy=strategy,
+        )
     selected_agents = _select_agents(request.agent)
     if request.agent and request.agent not in AGENT_ORDER:
         raise ReviewEngineError(f"unknown agent: {request.agent}")
 
     states = {agent: "pending" for agent in AGENT_ORDER}
     results: list[AgentResult] = []
-    max_concurrent = 0
-    current_concurrent = 0
-    failed = False
+    durations: dict[str, int] = {}
+    specialists = [agent for agent in selected_agents if agent != "final"]
+    orchestrator_started = time.monotonic()
+    if actual_strategy == "limited_parallel" and len(specialists) > 1:
+        max_concurrent = min(max_parallel_reviewers, len(specialists))
+        failed = _run_specialists_limited_parallel(
+            request,
+            client,
+            specialists,
+            states,
+            results,
+            durations,
+            max_concurrent,
+        )
+    else:
+        max_concurrent = _run_specialists_sequential(
+            request,
+            client,
+            specialists,
+            states,
+            results,
+            durations,
+        )
+        failed = any(result.status == "failed" for result in results)
+    orchestrator_duration_ms = _elapsed_ms(orchestrator_started)
 
-    for agent in selected_agents:
-        if _is_cancelled(request.cancel_file):
-            states[agent] = "cancelled"
-            raise AgentCancelledError(f"review was cancelled: {request.run_id}")
-        states[agent] = "running"
-        current_concurrent += 1
-        max_concurrent = max(max_concurrent, current_concurrent)
-        started = time.monotonic()
+    if "final" in selected_agents:
+        _raise_if_cancelled(request, states, "final")
+        states["final"] = "running"
+        final_started = time.monotonic()
         try:
-            prompt = _build_prompt(request, agent, results)
-            result = _run_agent_with_retry(client, prompt, request, agent)
+            prompt = _build_prompt(request, "final", results)
+            result = _run_agent_with_retry(client, prompt, request, "final")
             results.append(result)
-            states[agent] = "completed"
+            states["final"] = "completed"
         except subprocess.TimeoutExpired:
-            states[agent] = "failed"
+            states["final"] = "failed"
             failed = True
-            results.append(_failed_result(request.run_id, agent, "timeout"))
+            results.append(_failed_result(request.run_id, "final", "timeout"))
         except ReviewEngineError:
-            states[agent] = "failed"
+            states["final"] = "failed"
             failed = True
-            results.append(_failed_result(request.run_id, agent, "failed"))
+            results.append(_failed_result(request.run_id, "final", "failed"))
         finally:
-            current_concurrent -= 1
-            _ = started
+            durations["final"] = _elapsed_ms(final_started)
 
     for agent in AGENT_ORDER:
         if agent not in selected_agents and states[agent] == "pending":
@@ -221,6 +296,13 @@ def run_legacy_review_engine(request: EngineRequest, client: CopilotClient | Non
         failed=failed,
         max_concurrent=max_concurrent,
         execution_mode="legacy",
+        execution_strategy=actual_strategy,
+        requested_execution_strategy=strategy,
+        started_at=started_at,
+        started_monotonic=started_monotonic,
+        agent_durations_ms=durations,
+        orchestrator_duration_ms=orchestrator_duration_ms,
+        final_reviewer_duration_ms=durations.get("final"),
     )
 
 
@@ -233,6 +315,13 @@ def _reconcile_result(
     failed: bool,
     max_concurrent: int,
     execution_mode: str,
+    execution_strategy: str,
+    requested_execution_strategy: str,
+    started_at: str,
+    started_monotonic: float,
+    agent_durations_ms: dict[str, int],
+    orchestrator_duration_ms: int | None,
+    final_reviewer_duration_ms: int | None,
 ) -> EngineResult:
     ai_decision = results[-1].decision if results else "INCONCLUSIVE"
     rules = rule_based_decision(
@@ -248,6 +337,14 @@ def _reconcile_result(
         final_decision=stricter_decision(rules, ai_decision),
         max_concurrent_copilot_processes=max_concurrent,
         execution_mode=execution_mode,
+        execution_strategy=execution_strategy,
+        requested_execution_strategy=requested_execution_strategy,
+        started_at=started_at,
+        finished_at=_now_iso(),
+        duration_ms=_elapsed_ms(started_monotonic),
+        agent_durations_ms=agent_durations_ms,
+        orchestrator_duration_ms=orchestrator_duration_ms,
+        final_reviewer_duration_ms=final_reviewer_duration_ms,
     )
 
 
@@ -266,12 +363,141 @@ def _preflight_blocked_result(request: EngineRequest, *, provider: str, executio
     )
 
 
+def _run_specialists_sequential(
+    request: EngineRequest,
+    client: CopilotClient,
+    agents: list[str],
+    states: dict[str, str],
+    results: list[AgentResult],
+    durations: dict[str, int],
+) -> int:
+    max_concurrent = 0
+    for agent in agents:
+        _raise_if_cancelled(request, states, agent)
+        states[agent] = "running"
+        max_concurrent = max(max_concurrent, 1)
+        started = time.monotonic()
+        try:
+            prompt = _build_prompt(request, agent, [])
+            result = _run_agent_with_retry(client, prompt, request, agent)
+            results.append(result)
+            states[agent] = "completed"
+        except subprocess.TimeoutExpired:
+            states[agent] = "failed"
+            results.append(_failed_result(request.run_id, agent, "timeout"))
+        except ReviewEngineError:
+            states[agent] = "failed"
+            results.append(_failed_result(request.run_id, agent, "failed"))
+        finally:
+            durations[agent] = _elapsed_ms(started)
+    return max_concurrent
+
+
+def _run_specialists_limited_parallel(
+    request: EngineRequest,
+    client: CopilotClient,
+    agents: list[str],
+    states: dict[str, str],
+    results: list[AgentResult],
+    durations: dict[str, int],
+    max_workers: int,
+) -> bool:
+    failed = False
+    completed: dict[str, AgentResult] = {}
+    pending_agents = deque(agents)
+    futures: dict[Future[tuple[AgentResult, int]], str] = {}
+    executor = ThreadPoolExecutor(max_workers=max_workers)
+    try:
+        for _ in range(min(max_workers, len(pending_agents))):
+            _submit_next_specialist(request, client, states, pending_agents, futures, executor)
+        while futures:
+            if _is_cancelled(request.cancel_file):
+                _cancel_parallel_work(request, states, pending_agents, futures)
+            done, _ = wait(futures, timeout=0.05, return_when=FIRST_COMPLETED)
+            if not done:
+                continue
+            for future in done:
+                agent = futures.pop(future)
+                if future.cancelled():
+                    states[agent] = "cancelled"
+                    failed = True
+                    continue
+                result, duration_ms = future.result()
+                durations[agent] = duration_ms
+                completed[agent] = result
+                states[agent] = "completed" if result.status != "failed" else "failed"
+                failed = failed or result.status == "failed"
+            while pending_agents and len(futures) < max_workers:
+                if _is_cancelled(request.cancel_file):
+                    _cancel_parallel_work(request, states, pending_agents, futures)
+                _submit_next_specialist(request, client, states, pending_agents, futures, executor)
+    except AgentCancelledError:
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise
+    else:
+        executor.shutdown(wait=True, cancel_futures=True)
+    for agent in agents:
+        if agent in completed:
+            results.append(completed[agent])
+    return failed
+
+
+def _submit_next_specialist(
+    request: EngineRequest,
+    client: CopilotClient,
+    states: dict[str, str],
+    pending_agents: deque[str],
+    futures: dict[Future[tuple[AgentResult, int]], str],
+    executor: ThreadPoolExecutor,
+) -> None:
+    agent = pending_agents.popleft()
+    _raise_if_cancelled(request, states, agent)
+    states[agent] = "running"
+    futures[executor.submit(_run_one_specialist, request, client, agent)] = agent
+
+
+def _cancel_parallel_work(
+    request: EngineRequest,
+    states: dict[str, str],
+    pending_agents: deque[str],
+    futures: dict[Future[tuple[AgentResult, int]], str],
+) -> None:
+    for agent in pending_agents:
+        states[agent] = "cancelled"
+    pending_agents.clear()
+    for future, agent in list(futures.items()):
+        states[agent] = "cancelled"
+        future.cancel()
+    raise AgentCancelledError(f"review was cancelled: {request.run_id}")
+
+
+def _run_one_specialist(
+    request: EngineRequest,
+    client: CopilotClient,
+    agent: str,
+) -> tuple[AgentResult, int]:
+    started = time.monotonic()
+    try:
+        prompt = _build_prompt(request, agent, [])
+        return _run_agent_with_retry(client, prompt, request, agent), _elapsed_ms(started)
+    except subprocess.TimeoutExpired:
+        return _failed_result(request.run_id, agent, "timeout"), _elapsed_ms(started)
+    except ReviewEngineError:
+        return _failed_result(request.run_id, agent, "failed"), _elapsed_ms(started)
+
+
 def _select_agents(requested_agent: str | None) -> list[str]:
     if requested_agent is None:
         return list(AGENT_ORDER)
     if requested_agent == "final":
         return ["final"]
     return [requested_agent, "final"]
+
+
+def _actual_legacy_strategy(strategy: str) -> str:
+    if strategy == "native":
+        return "sequential"
+    return strategy
 
 
 def _quality_failed(quality_checks: list[QualityCheckResult]) -> bool:
@@ -522,6 +748,42 @@ def _failed_result(run_id: str, agent: str, reason: str) -> AgentResult:
     )
 
 
+def _with_timing(
+    result: EngineResult,
+    *,
+    started_at: str,
+    started_monotonic: float,
+    agent_durations_ms: dict[str, int],
+    orchestrator_duration_ms: int | None,
+    final_reviewer_duration_ms: int | None,
+    execution_strategy: str,
+    requested_execution_strategy: str,
+) -> EngineResult:
+    return EngineResult(
+        run_id=result.run_id,
+        provider=result.provider,
+        agent_states=result.agent_states,
+        agent_results=result.agent_results,
+        final_decision=result.final_decision,
+        max_concurrent_copilot_processes=result.max_concurrent_copilot_processes,
+        execution_mode=result.execution_mode,
+        execution_strategy=execution_strategy,
+        requested_execution_strategy=requested_execution_strategy,
+        started_at=started_at,
+        finished_at=_now_iso(),
+        duration_ms=_elapsed_ms(started_monotonic),
+        agent_durations_ms=agent_durations_ms,
+        orchestrator_duration_ms=orchestrator_duration_ms,
+        final_reviewer_duration_ms=final_reviewer_duration_ms,
+    )
+
+
+def _raise_if_cancelled(request: EngineRequest, states: dict[str, str], agent: str) -> None:
+    if _is_cancelled(request.cancel_file):
+        states[agent] = "cancelled"
+        raise AgentCancelledError(f"review was cancelled: {request.run_id}")
+
+
 def _normalize_reviewer_states(reviewer_states: dict[str, str] | None) -> dict[str, str]:
     if not reviewer_states:
         return {}
@@ -581,3 +843,11 @@ def _has_incomplete_reviewer_state(states: dict[str, str]) -> bool:
 
 def _is_cancelled(cancel_file: Path | None) -> bool:
     return bool(cancel_file and cancel_file.exists())
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _elapsed_ms(started: float) -> int:
+    return int((time.monotonic() - started) * 1000)

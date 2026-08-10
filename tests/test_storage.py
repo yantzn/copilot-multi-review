@@ -64,10 +64,59 @@ def test_save_review_result_uses_engine_reports_not_target_repo(tmp_path: Path) 
         (paths.output_root / repository.project_id / "latest" / "final.json").read_text(encoding="utf-8")
     )
     assert run_json["execution_mode"] == "subagent"
+    assert run_json["execution_strategy"] == "native"
     assert final_json["execution_mode"] == "subagent"
+    assert final_json["execution_strategy"] == "native"
     assert "- execution_mode: subagent" in latest_report(paths, repository.project_id)
     assert not (target / "reports").exists()
     assert not (target / "runtime").exists()
+
+
+def test_save_review_result_persists_strategy_and_timing(tmp_path: Path) -> None:
+    engine = tmp_path / "engine"
+    target = init_repo(tmp_path / "target repo")
+    paths = RootPaths.from_engine_root(engine)
+    repository = resolve_repository(str(target))
+    diff = collect_diff(repository, target="base")
+    result = EngineResult(
+        "run-1",
+        "github-copilot-cli",
+        {"security": "completed", "final": "completed"},
+        [],
+        "INCONCLUSIVE",
+        1,
+        execution_strategy="sequential",
+        requested_execution_strategy="native",
+        started_at="2026-08-10T00:00:00+00:00",
+        finished_at="2026-08-10T00:00:01+00:00",
+        duration_ms=1000,
+        agent_durations_ms={"security": 700, "final": 300},
+        orchestrator_duration_ms=700,
+        final_reviewer_duration_ms=300,
+    )
+
+    save_review_result(
+        paths,
+        repository,
+        run_id="run-1",
+        target="base",
+        request={"target": "base"},
+        diff=diff,
+        quality_checks=[QualityCheckResult(name="quality", command=[], status="skipped")],
+        engine_result=result,
+        copilot_version=None,
+    )
+
+    run_json = json.loads((paths.output_root / repository.project_id / "latest" / "run.json").read_text("utf-8"))
+    final_json = json.loads((paths.output_root / repository.project_id / "latest" / "final.json").read_text("utf-8"))
+
+    assert run_json["execution_strategy"] == "sequential"
+    assert run_json["requested_execution_strategy"] == "native"
+    assert run_json["duration_ms"] == 1000
+    assert run_json["agent_durations_ms"] == {"security": 700, "final": 300}
+    assert final_json["execution_strategy"] == "sequential"
+    assert final_json["requested_execution_strategy"] == "native"
+    assert final_json["incomplete_review"] is False
 
 
 def test_lock_rejects_double_start_and_releases_own_generation(tmp_path: Path) -> None:

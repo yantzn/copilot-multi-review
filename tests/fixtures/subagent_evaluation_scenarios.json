@@ -1,0 +1,123 @@
+{
+  "schema_version": "0.1.0",
+  "reviewers": [
+    "Requirements Reviewer",
+    "Correctness Reviewer",
+    "Security Reviewer",
+    "Testing Reviewer",
+    "Maintainability Reviewer",
+    "Performance Reviewer",
+    "Operations Reviewer",
+    "Devil Advocate"
+  ],
+  "scenarios": [
+    {
+      "id": "clean-small-diff",
+      "description": "Small harmless documentation/code diff with no expected Major or Critical findings.",
+      "expected_findings": []
+    },
+    {
+      "id": "requirements-violation",
+      "description": "Implementation ignores an explicit acceptance criterion.",
+      "expected_findings": [
+        {
+          "concept": "acceptance criterion violation",
+          "category": "requirements",
+          "severity": "Major"
+        }
+      ]
+    },
+    {
+      "id": "correctness-bug",
+      "description": "Off-by-one or invalid state transition in a small function.",
+      "expected_findings": [
+        {
+          "concept": "off by one correctness bug",
+          "category": "correctness",
+          "severity": "Major"
+        }
+      ]
+    },
+    {
+      "id": "security-vulnerability",
+      "description": "Safe fixture text describing command injection risk without executing commands.",
+      "expected_findings": [
+        {
+          "concept": "command injection",
+          "category": "security",
+          "severity": "Major"
+        }
+      ]
+    },
+    {
+      "id": "missing-tests",
+      "description": "Behavioral change with no regression test for the new branch.",
+      "expected_findings": [
+        {
+          "concept": "missing regression test",
+          "category": "testing",
+          "severity": "Major"
+        }
+      ]
+    },
+    {
+      "id": "multi-concern",
+      "description": "One change spans requirements, correctness, and test coverage concerns.",
+      "expected_findings": [
+        {
+          "concept": "requirement and correctness mismatch",
+          "category": "requirements",
+          "severity": "Major"
+        },
+        {
+          "concept": "missing regression test",
+          "category": "testing",
+          "severity": "Major"
+        }
+      ]
+    },
+    {
+      "id": "large-diff",
+      "description": "Large generated fixture diff used to verify truncation and duration recording.",
+      "expected_findings": []
+    },
+    {
+      "id": "secret-blocked-before-ai",
+      "description": "Fake high-entropy secret fixture that must block before any Copilot invocation.",
+      "expected_findings": [
+        {
+          "concept": "secret scan blocked before AI",
+          "category": "security",
+          "severity": "Critical"
+        }
+      ]
+    },
+    {
+      "id": "one-subagent-failure",
+      "description": "Security Reviewer fails while other specialists and Final Reviewer complete.",
+      "expected_findings": [
+        {
+          "concept": "failed reviewer prevents approve",
+          "category": "operations",
+          "severity": "Major"
+        }
+      ]
+    },
+    {
+      "id": "final-reviewer-failure",
+      "description": "Final Reviewer timeout, invalid schema, subprocess error, malformed JSON, or failed status.",
+      "expected_findings": [
+        {
+          "concept": "final reviewer failure prevents approve",
+          "category": "operations",
+          "severity": "Major"
+        }
+      ]
+    },
+    {
+      "id": "windows-japanese-path",
+      "description": "Repository path like C:\\...\\レビュー対象\\サンプル verifies path, UTF-8, subprocess, report, run_id/history, and prompt context handling.",
+      "expected_findings": []
+    }
+  ]
+}

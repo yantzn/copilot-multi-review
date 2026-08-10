@@ -12,6 +12,11 @@
     "devil_advocate",
     "final"
   ],
+  "review": {
+    "standard_orchestration_strategy": "native",
+    "cli_helper_default_strategy": "sequential",
+    "max_parallel_reviewers": 2
+  },
   "max_concurrent_copilot_processes": 1,
   "output": {
     "reports_dir": "reports",

@@ -66,3 +66,25 @@ ai-review cleanup-locks --repo <path> --apply
 ## 保存失敗
 
 `reports/`と`runtime/`を書き込めるか確認してください。対象リポジトリではなく、この専用リポジトリ側の権限を確認します。
+## Subagent Evaluation Troubleshooting
+
+If a real Copilot Chat run is unavailable, mark manual E2E as `BLOCKED`. Do not mark it `PASS`.
+
+If Copilot or VS Code does not expose reviewer-level timing, internal parallelism, prompt/context, tool usage, or returned result details, record the field as `NOT_OBSERVABLE`. Do not infer it from wall-clock time or prompt length.
+
+If AI credits cannot be retrieved at per-subagent/per-reviewer granularity, record:
+
+```text
+credits.available = false
+credits.reason = "Current GitHub Copilot interfaces do not expose per-subagent credit usage."
+```
+
+If a specialist fails and Final Reviewer still returns `APPROVE`, the deterministic final decision must be at least `INCONCLUSIVE`. If Final Reviewer itself fails, the final decision must also not be `APPROVE`.
+
+For Windows path problems, reproduce with a target repository under a UTF-8 path such as:
+
+```text
+C:\...\レビュー対象\サンプル
+```
+
+Verify repository resolution, diff collection, subprocess execution, report output, run history, and Custom Agent prompt/context generation.

@@ -62,3 +62,45 @@ Conclusion:
 - A Windows VS Code profile with GitHub Copilot Chat installed is still required to replace the BLOCKED runtime rows with PASS/FAIL/PARTIAL observations.
 
 Representative manual steps and the per-check result matrix are maintained in `docs/copilot-chat-review-ux.md`.
+
+## Issue #29 Subagent Evaluation Record
+
+Date: 2026-08-10
+
+Detailed machine-readable record:
+
+```text
+docs/subagent-evaluation-results-2026-08-10.json
+```
+
+Scenario fixture:
+
+```text
+tests/fixtures/subagent_evaluation_scenarios.json
+```
+
+| Scenario | Status | Notes |
+| --- | --- | --- |
+| clean-small-diff | BLOCKED | Requires authenticated Copilot Chat Subagent execution |
+| requirements-violation | BLOCKED | Requires authenticated Copilot Chat Subagent execution |
+| correctness-bug | BLOCKED | Requires authenticated Copilot Chat Subagent execution |
+| security-vulnerability | BLOCKED | Requires authenticated Copilot Chat Subagent execution |
+| missing-tests | BLOCKED | Requires authenticated Copilot Chat Subagent execution |
+| multi-concern | BLOCKED | Requires authenticated Copilot Chat Subagent execution |
+| large-diff | BLOCKED | Requires authenticated Copilot Chat Subagent execution |
+| secret-blocked-before-ai | PASS | pytest confirms zero Copilot calls before BLOCKED |
+| one-subagent-failure | PASS | pytest confirms final decision is not APPROVE |
+| final-reviewer-failure | PASS | pytest confirms final decision is not APPROVE |
+| windows-japanese-path | PASS | pytest uses `レビュー対象\サンプル` |
+
+Strategy comparison:
+
+```text
+Strategy          Quality    Duration    Credits       Rate limit
+---------------------------------------------------------------
+sequential        PARTIAL    pytest only  Unavailable   not observed
+limited_parallel  PARTIAL    pytest only  Unavailable   not observed
+native            BLOCKED    unavailable  Unavailable   not observed
+```
+
+Standard strategy decision: keep `native` delegation as the standard because real Copilot Subagent evidence was not sufficient to prove that `limited_parallel` improves speed without quality, independence, credit, rate limit, or complexity regressions.

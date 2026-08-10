@@ -72,6 +72,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Review execution mode. Default is subagent; legacy is deprecated Python serial agent execution.",
     )
     review.add_argument(
+        "--orchestration-strategy",
+        choices=["sequential", "limited_parallel", "native"],
+        default="native",
+        help="Evaluation strategy. Native is the standard subagent path; sequential/limited_parallel apply to legacy helper execution.",
+    )
+    review.add_argument(
+        "--max-parallel-reviewers",
+        type=int,
+        default=2,
+        help="Maximum specialist reviewers for legacy limited_parallel helper execution.",
+    )
+    review.add_argument(
         "--target",
         required=True,
         choices=["base", "uncommitted", "staged", "commits", "file"],
@@ -153,6 +165,10 @@ def handle_review(args: argparse.Namespace) -> int:
                 final_decision="INCONCLUSIVE",
                 max_concurrent_copilot_processes=0,
                 execution_mode=args.execution_mode,
+                execution_strategy="native" if args.execution_mode == "subagent" else (
+                    "sequential" if args.orchestration_strategy == "native" else args.orchestration_strategy
+                ),
+                requested_execution_strategy=args.orchestration_strategy,
             )
         else:
             if args.agent and args.execution_mode == "subagent":
@@ -169,6 +185,8 @@ def handle_review(args: argparse.Namespace) -> int:
                     agent=args.agent,
                     cancel_file=paths.runtime_root / repository.project_id / "cancel.json",
                     execution_mode=args.execution_mode,
+                    orchestration_strategy=args.orchestration_strategy,
+                    max_parallel_reviewers=args.max_parallel_reviewers,
                 )
             )
         print(f"Final decision: {engine_result.final_decision}")
@@ -183,6 +201,8 @@ def handle_review(args: argparse.Namespace) -> int:
                 "agent": args.agent,
                 "no_agents": args.no_agents,
                 "execution_mode": engine_result.execution_mode,
+                "orchestration_strategy": args.orchestration_strategy,
+                "max_parallel_reviewers": args.max_parallel_reviewers,
             },
             diff=diff,
             quality_checks=quality,
@@ -221,6 +241,8 @@ def handle_rerun(args: argparse.Namespace) -> int:
         agent=latest.get("request", {}).get("agent"),
         no_agents=args.no_agents,
         execution_mode=latest.get("request", {}).get("execution_mode", "subagent"),
+        orchestration_strategy=latest.get("request", {}).get("orchestration_strategy", "native"),
+        max_parallel_reviewers=latest.get("request", {}).get("max_parallel_reviewers", 2),
     )
     return handle_review(review_args)
 

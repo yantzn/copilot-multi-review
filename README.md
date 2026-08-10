@@ -210,3 +210,33 @@ Review the changes corresponding to PR #123.
 `Review Orchestrator` is the normal user-facing entry point. It delegates to the named specialist reviewers with Copilot's standard subagent tool calls, then invokes `Final Reviewer` as a subagent for synthesis. Use the expandable subagent tool calls in Copilot Chat to inspect the reviewer name, prompt/context, visible tool usage, and returned result. Exact icons and labels can vary by VS Code and Copilot version.
 
 Specialist reviewers use `user-invocable: false` so they do not fill the normal agent picker, while remaining available to `Review Orchestrator` as subagents. See `docs/copilot-chat-review-ux.md` for the documented UI assumptions, Windows manual E2E steps, and the `run_id` relationship between Chat-only and Python Controller execution.
+
+## Issue #29 Subagent Evaluation
+
+Standard execution strategy: `native`
+
+`native` means the standard `execution_mode = subagent` path: Python prepares safe context, invokes `Review Orchestrator` once, validates the untrusted Final Reviewer result, and applies deterministic fail-safe decision rules. It does not claim that every Copilot reviewer is guaranteed to run in parallel internally.
+
+Legacy Python helper comparison paths remain available only for evaluation and migration:
+
+```bash
+ai-review review --repo <path> --target base --execution-mode legacy --orchestration-strategy sequential
+ai-review review --repo <path> --target base --execution-mode legacy --orchestration-strategy limited_parallel --max-parallel-reviewers 2
+```
+
+Failure meanings:
+
+- confirmed secret: `BLOCKED`, no Copilot invocation
+- specialist failure: final decision must not be `APPROVE`
+- Final Reviewer failure: final decision must not be `APPROVE`
+- unavailable Chat UI or credit data: record `BLOCKED`, `NOT_OBSERVABLE`, or `Unavailable`, not guessed values
+
+Evaluation records:
+
+- `docs/subagent-evaluation.md`
+- `docs/subagent-evaluation-results-2026-08-10.json`
+- `tests/fixtures/subagent_evaluation_scenarios.json`
+
+AI credits: current GitHub Copilot interfaces do not expose per-subagent/per-reviewer credit usage for this architecture. Do not estimate credits from token count, prompt length, duration, or fixed coefficients.
+
+Issue #6 status: legacy and superseded by #23-#29 for the standard path. It was the original closed Python nine-reviewer sequential MVP and must not be restored as the standard.
