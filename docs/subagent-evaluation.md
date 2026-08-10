@@ -6,7 +6,7 @@ Issue #29 evaluates the Copilot native Subagent review topology before changing 
 
 Selected standard strategy: `native`
 
-Reason: this environment does not provide enough real Copilot Chat/Subagent, quality, credit, UI, or internal parallelism data to justify changing the default. The safe initial decision from Issue #29 is therefore to keep Copilot native delegation as the standard path. `sequential` and `limited_parallel` remain comparison/helper strategies for the Python controller and benchmarks.
+Reason: this environment does not provide enough real Copilot Chat/Subagent, quality, credit, UI, or internal parallelism data to justify changing the default. The safe initial decision from Issue #29 is therefore to keep Copilot native delegation as the standard path. `sequential` and `limited_parallel` remain comparison/helper strategies for the Python controller and benchmarks. If `native` is requested through the Python helper, reports separate the request from the actual controller behavior: `requested_execution_strategy = native`, `execution_strategy = sequential`.
 
 Do not treat `native` as a guarantee that every reviewer runs concurrently. It means delegation is handled by the standard GitHub Copilot / VS Code Subagent mechanism.
 
@@ -71,6 +71,8 @@ Specialist reviewers must remain independent:
 - no passing early results into reviewers still running
 
 Only the Final Reviewer receives specialist results. The Final Reviewer runs after every selected specialist has completed or failed.
+
+For `limited_parallel`, the controller keeps only `max_parallel_reviewers` specialists in flight, checks `cancel_file` while waiting for futures, stops submitting new reviewers after cancellation, and never starts Final Reviewer after cancellation. Already running Copilot subprocesses cannot be treated as stopped unless the process layer exposes a cancellable handle; this is a controller cancellation guarantee, not proof that GitHub Copilot killed an in-flight request.
 
 ## Failure Behavior
 

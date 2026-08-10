@@ -216,13 +216,19 @@ def _matches_expected(expected: ExpectedFinding, actual_findings: list[ActualFin
 def _matches_actual(expected: ExpectedFinding, actual: ActualFinding) -> bool:
     if not _is_major_or_critical(actual.severity):
         return False
-    if expected.category and actual.category and expected.category != actual.category:
+    if expected.category and actual.category != expected.category:
         return False
-    if expected.file and actual.file and Path(expected.file).as_posix() != Path(actual.file).as_posix():
+    if expected.file and (
+        actual.file is None or Path(expected.file).as_posix() != Path(actual.file).as_posix()
+    ):
         return False
     expected_terms = _normalize_terms(expected.concept)
     actual_terms = _normalize_terms(" ".join(filter(None, [actual.message, actual.category or "", actual.file or ""])))
-    return bool(expected_terms & actual_terms)
+    if not expected_terms:
+        return False
+    matched_terms = expected_terms & actual_terms
+    required_matches = min(len(expected_terms), max(2, int(len(expected_terms) * 0.6 + 0.999)))
+    return len(matched_terms) >= required_matches
 
 
 def _duplicate_count(findings: list[ActualFinding]) -> int:
@@ -246,4 +252,4 @@ def _normalize_terms(text: str) -> set[str]:
     normalized = text.lower()
     for char in separators:
         normalized = normalized.replace(char, " ")
-    return {term for term in normalized.split() if len(term) >= 4}
+    return {term for term in normalized.split() if len(term) >= 3}

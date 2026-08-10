@@ -235,18 +235,20 @@ The Python controller supports evaluation/helper strategies:
 
 - `sequential`: run selected specialist reviewers one at a time, then Final Reviewer
 - `limited_parallel`: run independent specialists with `max_parallel_reviewers`, then Final Reviewer
-- `native`: record/evaluate the standard Copilot Subagent path; Chat internals are not inferred
+- `native`: requested standard Copilot Subagent path. The Python helper cannot execute native Chat delegation, so controller reports store `requested_execution_strategy = native` and `execution_strategy = sequential`.
 
 Specialist reviewer independence is mandatory for every strategy. Specialist prompts do not include `previous_results`, other reviewer findings, shared mutable state, or early-completed reviewer output. Final Reviewer is the only component that receives specialist results, and it runs only after every selected specialist has completed or failed.
 
 Timing fields are additive and backward compatible:
 
 - `run.json.execution_strategy`
+- `run.json.requested_execution_strategy`
 - `run.json.duration_ms`
 - `run.json.orchestrator_duration_ms`
 - `run.json.agent_durations_ms`
 - `run.json.final_reviewer_duration_ms`
 - `final.json.execution_strategy`
+- `final.json.requested_execution_strategy`
 - `final.json.incomplete_review`
 
 Evaluation schema and results are documented in `docs/subagent-evaluation.md` and `docs/subagent-evaluation-results-2026-08-10.json`.

@@ -158,7 +158,8 @@ def handle_review(args: argparse.Namespace) -> int:
                 agent_results=[],
                 final_decision="INCONCLUSIVE",
                 max_concurrent_copilot_processes=0,
-                execution_strategy=args.orchestration_strategy,
+                execution_strategy="sequential" if args.orchestration_strategy == "native" else args.orchestration_strategy,
+                requested_execution_strategy=args.orchestration_strategy,
             )
         else:
             engine_result = run_review_engine(

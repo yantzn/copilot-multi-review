@@ -84,6 +84,20 @@ def test_quality_metrics() -> None:
     assert metrics.duplicate_finding_count == 1
 
 
+def test_quality_metrics_require_specific_concept_and_file_match() -> None:
+    expected = [ExpectedFinding("missing authorization", "security", "Major", "src/auth.py")]
+    actual = [
+        ActualFinding("missing regression test", "security", "Major", "src/auth.py"),
+        ActualFinding("missing authorization check", "security", "Major"),
+        ActualFinding("missing authorization check", "testing", "Major", "src/auth.py"),
+    ]
+
+    metrics = compute_metrics(expected, actual)
+
+    assert metrics.critical_major_recall == 0.0
+    assert metrics.false_positive_count == 3
+
+
 def test_strategy_validation() -> None:
     assert validate_execution_strategy("native") == "native"
     assert validate_execution_strategy("limited_parallel") == "limited_parallel"

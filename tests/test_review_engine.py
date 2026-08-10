@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 import json
 import subprocess
+import threading
+import time
 
 import pytest
 
@@ -375,6 +377,54 @@ def test_limited_parallel_keeps_specialists_independent(tmp_path: Path) -> None:
     assert client.payloads[-1]["agent"] == "final"
 
 
+def test_limited_parallel_cancel_during_run_starts_no_more_reviewers_or_final(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path / "repo")
+    cancel_file = tmp_path / "cancel.json"
+    request = request_for(repo)
+    request = EngineRequest(
+        repository=request.repository,
+        diff=request.diff,
+        quality_checks=request.quality_checks,
+        target=request.target,
+        run_id=request.run_id,
+        cancel_file=cancel_file,
+        orchestration_strategy="limited_parallel",
+        max_parallel_reviewers=2,
+    )
+
+    class CancellingClient(FakeClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self._lock = threading.Lock()
+
+        def run_prompt(self, prompt: str, *, timeout_seconds: int) -> str:
+            payload = json.loads(prompt.split("PAYLOAD_JSON\n", 1)[1].splitlines()[0])
+            with self._lock:
+                self.calls.append(payload["agent"])
+                if not cancel_file.exists():
+                    cancel_file.write_text("{}", encoding="utf-8")
+            time.sleep(0.1)
+            return json.dumps(
+                {
+                    "run_id": payload["run_id"],
+                    "agent": payload["agent"],
+                    "provider": "github-copilot-cli",
+                    "schema_version": "0.1.0",
+                    "decision": "APPROVE",
+                    "findings": [],
+                    "summary": "ok",
+                }
+            )
+
+    client = CancellingClient()
+
+    with pytest.raises(AgentCancelledError):
+        run_review_engine(request, client)
+
+    assert "final" not in client.calls
+    assert len(client.calls) <= 2
+
+
 def test_timing_fields_are_recorded(tmp_path: Path) -> None:
     repo = init_repo(tmp_path / "repo")
 
@@ -402,6 +452,26 @@ def test_invalid_strategy_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError):
         run_review_engine(request, FakeClient())
+
+
+def test_native_request_records_sequential_controller_execution(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path / "repo")
+    request = request_for(repo, agent="security")
+    request = EngineRequest(
+        repository=request.repository,
+        diff=request.diff,
+        quality_checks=request.quality_checks,
+        target=request.target,
+        run_id=request.run_id,
+        agent=request.agent,
+        orchestration_strategy="native",
+    )
+
+    result = run_review_engine(request, FakeClient())
+
+    assert result.requested_execution_strategy == "native"
+    assert result.execution_strategy == "sequential"
+    assert result.max_concurrent_copilot_processes == 1
 
 
 def test_windows_japanese_path_review_report_fields(tmp_path: Path) -> None:

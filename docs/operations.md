@@ -118,6 +118,8 @@ ai-review review --repo <path> --target base --orchestration-strategy limited_pa
 
 Use these helper strategies for controlled comparison and deterministic report persistence. Do not promote the legacy Python nine-call sequential runner back to the standard path.
 
+If `--orchestration-strategy native` is passed to the Python helper, the report records `requested_execution_strategy: native` and `execution_strategy: sequential`. Native delegation itself is available only through the standard Copilot Chat/Subagent path.
+
 Evaluation artifacts:
 
 ```text
@@ -132,5 +134,6 @@ Failure meanings:
 - Final Reviewer failed: final decision must not be `APPROVE`
 - secret scan blocked: Copilot is not invoked and final decision is `BLOCKED`
 - Chat UI unavailable: record `BLOCKED` or `NOT_OBSERVABLE`, not `PASS`
+- limited parallel cancelled: the controller stops submitting new specialists and does not start Final Reviewer
 
 Windows Japanese path check uses a path like `C:\...\レビュー対象\サンプル` and verifies repository resolution, diff collection, UTF-8 handling, subprocess-safe prompt construction, report output, and run history.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import deque
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 import json
@@ -63,6 +64,7 @@ class EngineResult:
     final_decision: str
     max_concurrent_copilot_processes: int
     execution_strategy: str = "sequential"
+    requested_execution_strategy: str | None = None
     started_at: str | None = None
     finished_at: str | None = None
     duration_ms: int | None = None
@@ -99,6 +101,7 @@ class CopilotClient:
 def run_review_engine(request: EngineRequest, client: CopilotClient | None = None) -> EngineResult:
     client = client or CopilotClient()
     strategy = validate_execution_strategy(request.orchestration_strategy)
+    actual_strategy = _actual_controller_strategy(strategy)
     max_parallel_reviewers = validate_max_parallel_reviewers(request.max_parallel_reviewers)
     started_at = _now_iso()
     started_monotonic = time.monotonic()
@@ -112,7 +115,8 @@ def run_review_engine(request: EngineRequest, client: CopilotClient | None = Non
             agent_results=[],
             final_decision="BLOCKED",
             max_concurrent_copilot_processes=0,
-            execution_strategy=strategy,
+            execution_strategy=actual_strategy,
+            requested_execution_strategy=strategy,
             started_at=started_at,
             finished_at=_now_iso(),
             duration_ms=_elapsed_ms(started_monotonic),
@@ -131,7 +135,7 @@ def run_review_engine(request: EngineRequest, client: CopilotClient | None = Non
     specialists = [agent for agent in selected_agents if agent != "final"]
 
     orchestrator_started = time.monotonic()
-    if strategy == "limited_parallel" and len(specialists) > 1:
+    if actual_strategy == "limited_parallel" and len(specialists) > 1:
         max_concurrent = min(max_parallel_reviewers, len(specialists))
         failed = _run_specialists_limited_parallel(
             request,
@@ -191,7 +195,8 @@ def run_review_engine(request: EngineRequest, client: CopilotClient | None = Non
         agent_results=results,
         final_decision=stricter_decision(rules, ai_decision),
         max_concurrent_copilot_processes=max_concurrent,
-        execution_strategy=strategy,
+        execution_strategy=actual_strategy,
+        requested_execution_strategy=strategy,
         started_at=started_at,
         finished_at=_now_iso(),
         duration_ms=_elapsed_ms(started_monotonic),
@@ -242,22 +247,72 @@ def _run_specialists_limited_parallel(
 ) -> bool:
     failed = False
     completed: dict[str, AgentResult] = {}
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {}
-        for agent in agents:
-            _raise_if_cancelled(request, states, agent)
-            states[agent] = "running"
-            futures[executor.submit(_run_one_specialist, request, client, agent)] = agent
-        for future in as_completed(futures):
-            agent = futures[future]
-            result, duration_ms = future.result()
-            durations[agent] = duration_ms
-            completed[agent] = result
-            states[agent] = "completed" if result.status != "failed" else "failed"
-            failed = failed or result.status == "failed"
+    pending_agents = deque(agents)
+    futures: dict[Future[tuple[AgentResult, int]], str] = {}
+    executor = ThreadPoolExecutor(max_workers=max_workers)
+    try:
+        for _ in range(min(max_workers, len(pending_agents))):
+            _submit_next_specialist(request, client, states, pending_agents, futures, executor)
+        while futures:
+            if _is_cancelled(request.cancel_file):
+                _cancel_parallel_work(request, states, pending_agents, futures, executor)
+            done, _ = wait(futures, timeout=0.05, return_when=FIRST_COMPLETED)
+            if not done:
+                continue
+            for future in done:
+                agent = futures.pop(future)
+                if future.cancelled():
+                    states[agent] = "cancelled"
+                    failed = True
+                    continue
+                result, duration_ms = future.result()
+                durations[agent] = duration_ms
+                completed[agent] = result
+                states[agent] = "completed" if result.status != "failed" else "failed"
+                failed = failed or result.status == "failed"
+            while pending_agents and len(futures) < max_workers:
+                if _is_cancelled(request.cancel_file):
+                    _cancel_parallel_work(request, states, pending_agents, futures, executor)
+                _submit_next_specialist(request, client, states, pending_agents, futures, executor)
+    except AgentCancelledError:
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise
+    else:
+        executor.shutdown(wait=True, cancel_futures=True)
     for agent in agents:
-        results.append(completed[agent])
+        if agent in completed:
+            results.append(completed[agent])
     return failed
+
+
+def _submit_next_specialist(
+    request: EngineRequest,
+    client: CopilotClient,
+    states: dict[str, str],
+    pending_agents: deque[str],
+    futures: dict[Future[tuple[AgentResult, int]], str],
+    executor: ThreadPoolExecutor,
+) -> None:
+    agent = pending_agents.popleft()
+    _raise_if_cancelled(request, states, agent)
+    states[agent] = "running"
+    futures[executor.submit(_run_one_specialist, request, client, agent)] = agent
+
+
+def _cancel_parallel_work(
+    request: EngineRequest,
+    states: dict[str, str],
+    pending_agents: deque[str],
+    futures: dict[Future[tuple[AgentResult, int]], str],
+    executor: ThreadPoolExecutor,
+) -> None:
+    for agent in pending_agents:
+        states[agent] = "cancelled"
+    pending_agents.clear()
+    for future, agent in list(futures.items()):
+        states[agent] = "cancelled"
+        future.cancel()
+    raise AgentCancelledError(f"review was cancelled: {request.run_id}")
 
 
 def _run_one_specialist(
@@ -281,6 +336,12 @@ def _select_agents(requested_agent: str | None) -> list[str]:
     if requested_agent == "final":
         return ["final"]
     return [requested_agent, "final"]
+
+
+def _actual_controller_strategy(strategy: str) -> str:
+    if strategy == "native":
+        return "sequential"
+    return strategy
 
 
 def _quality_failed(quality_checks: list[QualityCheckResult]) -> bool:

@@ -77,6 +77,7 @@ def test_save_review_result_persists_strategy_and_timing(tmp_path: Path) -> None
         "INCONCLUSIVE",
         1,
         execution_strategy="sequential",
+        requested_execution_strategy="native",
         started_at="2026-08-10T00:00:00+00:00",
         finished_at="2026-08-10T00:00:01+00:00",
         duration_ms=1000,
@@ -101,9 +102,11 @@ def test_save_review_result_persists_strategy_and_timing(tmp_path: Path) -> None
     final_json = json.loads((paths.output_root / repository.project_id / "latest" / "final.json").read_text("utf-8"))
 
     assert run_json["execution_strategy"] == "sequential"
+    assert run_json["requested_execution_strategy"] == "native"
     assert run_json["duration_ms"] == 1000
     assert run_json["agent_durations_ms"] == {"security": 700, "final": 300}
     assert final_json["execution_strategy"] == "sequential"
+    assert final_json["requested_execution_strategy"] == "native"
     assert final_json["incomplete_review"] is False
 
 

@@ -217,6 +217,8 @@ ai-review review --repo <path> --target base --orchestration-strategy sequential
 ai-review review --repo <path> --target base --orchestration-strategy limited_parallel --max-parallel-reviewers 2
 ```
 
+If `native` is requested through the Python CLI, reports record `requested_execution_strategy: native` and `execution_strategy: sequential`; native delegation itself is the Copilot Chat/Subagent path.
+
 Failure meanings:
 
 - confirmed secret: `BLOCKED`, no Copilot invocation
