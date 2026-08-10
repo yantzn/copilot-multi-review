@@ -152,6 +152,7 @@ def handle_review(args: argparse.Namespace) -> int:
                 agent_results=[],
                 final_decision="INCONCLUSIVE",
                 max_concurrent_copilot_processes=0,
+                execution_mode=args.execution_mode,
             )
         else:
             if args.agent and args.execution_mode == "subagent":
