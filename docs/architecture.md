@@ -96,6 +96,35 @@ flowchart TD
   D --> F
 ```
 
+Final Reviewer synthesis and Python rule-based final decision are separate:
+
+```mermaid
+flowchart TD
+  U["User"] --> O["Review Orchestrator"]
+  O --> R["Requirements Reviewer"]
+  O --> K["Correctness Reviewer"]
+  O --> S["Security Reviewer"]
+  O --> T["Testing Reviewer"]
+  O --> M["Maintainability Reviewer"]
+  O --> P["Performance Reviewer"]
+  O --> OP["Operations Reviewer"]
+  O --> D["Devil Advocate"]
+  R --> IR["independent results"]
+  K --> IR
+  S --> IR
+  T --> IR
+  M --> IR
+  P --> IR
+  OP --> IR
+  D --> IR
+  IR --> F["Final Reviewer"]
+  F --> AI["AI synthesis decision"]
+  AI --> PY["Python rule-based decision"]
+  PY --> SD["safer / stricter final decision"]
+```
+
+Only the Final Reviewer sees all specialist reviewer results. Specialist reviewers receive the same primary target context and must not receive other reviewers' findings, summaries, severities, or conclusions. The Final Reviewer receives specialist results, reviewer states, truncation status, scan/check status, and minimal target metadata for integration; it must not redo detailed specialist review from the original diff.
+
 The existing CLI path remains the source of the current automated local review flow:
 
 ```mermaid
@@ -139,6 +168,26 @@ The Custom Agent side is responsible for:
 
 The Review Orchestrator must not perform detailed requirements, correctness, security, testing, maintainability, performance, operations, devil advocate, or final decision review itself. It coordinates specialist work and reports missing, failed, blocked, or inconclusive reviewer outcomes.
 
+The Final Reviewer is a read-only leaf Custom Agent. It performs synthesis only:
+
+- merge duplicate specialist findings without overcounting
+- retain `reported_by`, `reported_severities`, and Critical/Major rationale provenance
+- resolve severity conflicts conservatively with `Critical > Major > Minor > Info`
+- surface contradictions between reviewers under `conflicts`
+- surface failed, missing, skipped, not_run, blocked, and inconclusive reviewers
+- avoid unconditional `APPROVE` when context is truncated, quality/secret checks are unreliable, or required reviewers are incomplete
+- emit only the existing decision vocabulary: `APPROVE`, `APPROVE_WITH_NOTES`, `CHANGES_REQUIRED`, `BLOCKED`, `INCONCLUSIVE`
+
+The Final Reviewer decision is an AI synthesis candidate. It is not the final pass/fail authority by itself. The Python ReviewEngine keeps its existing safety rule:
+
+```python
+ai_decision = ...
+rules = rule_based_decision(...)
+final_decision = stricter_decision(rules, ai_decision)
+```
+
+This preserves the safer decision when AI synthesis and rule-based decision disagree.
+
 ### Boundary Rules
 
 The design forbids:
@@ -165,7 +214,7 @@ An omitted `tools` field is not a general GitHub / VS Code Custom Agent schema e
 
 ### Specialist Reviewer Boundaries
 
-Issue #25 adds eight read-only Custom Agent specialist reviewers. They are leaf subagents: the Review Orchestrator may invoke them, but they must not invoke other agents, edit files, run terminal commands, or write review artifacts into the target repository. Each reviewer receives the same primary diff/context and evaluates it independently. Specialist reviewers do not receive `previous_findings`; reviewer results are aggregated only after specialist execution for a later final integration phase.
+Issue #25 adds eight read-only Custom Agent specialist reviewers. They are leaf subagents: the Review Orchestrator may invoke them, but they must not invoke other agents, edit files, run terminal commands, or write review artifacts into the target repository. Each reviewer receives the same primary diff/context and evaluates it independently. Specialist reviewers do not receive `previous_findings`; reviewer results are aggregated only after specialist execution and then passed to the Final Reviewer.
 
 | Reviewer | Primary responsibility | Should report | Should defer to |
 | --- | --- | --- | --- |

@@ -91,7 +91,7 @@ def run_review_engine(request: EngineRequest, client: CopilotClient | None = Non
             final_decision="BLOCKED",
             max_concurrent_copilot_processes=0,
         )
-    selected_agents = [request.agent] if request.agent else list(AGENT_ORDER)
+    selected_agents = _select_agents(request.agent)
     if request.agent and request.agent not in AGENT_ORDER:
         raise ReviewEngineError(f"未知のエージェントです: {request.agent}")
 
@@ -131,7 +131,11 @@ def run_review_engine(request: EngineRequest, client: CopilotClient | None = Non
             states[agent] = "skipped"
 
     ai_decision = results[-1].decision if results else "INCONCLUSIVE"
-    rules = rule_based_decision(results, truncated=request.diff.truncated, failed=failed)
+    rules = rule_based_decision(
+        results,
+        truncated=request.diff.truncated,
+        failed=failed or _quality_failed(request.quality_checks),
+    )
     return EngineResult(
         run_id=request.run_id,
         provider=client.provider,
@@ -140,6 +144,18 @@ def run_review_engine(request: EngineRequest, client: CopilotClient | None = Non
         final_decision=stricter_decision(rules, ai_decision),
         max_concurrent_copilot_processes=max_concurrent,
     )
+
+
+def _select_agents(requested_agent: str | None) -> list[str]:
+    if requested_agent is None:
+        return list(AGENT_ORDER)
+    if requested_agent == "final":
+        return ["final"]
+    return [requested_agent, "final"]
+
+
+def _quality_failed(quality_checks: list[QualityCheckResult]) -> bool:
+    return any(check.status == "failed" for check in quality_checks)
 
 
 def parse_agent_response(raw: str, *, run_id: str, agent: str) -> AgentResult:
@@ -151,7 +167,7 @@ def parse_agent_response(raw: str, *, run_id: str, agent: str) -> AgentResult:
         raise AgentSchemaError("agentが一致しません。")
     if payload["provider"] != "github-copilot-cli":
         raise AgentSchemaError("providerが一致しません。")
-    findings = [Finding(**item) for item in payload.get("findings", [])]
+    findings = [_parse_finding(item) for item in payload.get("findings", [])]
     return AgentResult(
         run_id=payload["run_id"],
         agent=payload["agent"],
@@ -160,6 +176,10 @@ def parse_agent_response(raw: str, *, run_id: str, agent: str) -> AgentResult:
         decision=payload["decision"],
         findings=findings,
         summary=payload["summary"],
+        status=payload.get("status", "completed"),
+        reviewer_states=payload.get("reviewer_states"),
+        conflicts=payload.get("conflicts"),
+        incomplete_review=payload.get("incomplete_review"),
     )
 
 
@@ -206,16 +226,43 @@ def _validate_payload(payload: dict) -> None:
         raise AgentSchemaError("decisionが不正です。")
     if not isinstance(payload["findings"], list):
         raise AgentSchemaError("findingsは配列である必要があります。")
+    if "status" in payload and payload["status"] not in {"completed", "inconclusive", "blocked", "failed"}:
+        raise AgentSchemaError("status is invalid")
+    if "reviewer_states" in payload and not isinstance(payload["reviewer_states"], dict):
+        raise AgentSchemaError("reviewer_states must be an object")
+    if "conflicts" in payload and not isinstance(payload["conflicts"], list):
+        raise AgentSchemaError("conflicts must be an array")
+    if "incomplete_review" in payload and not isinstance(payload["incomplete_review"], bool):
+        raise AgentSchemaError("incomplete_review must be a boolean")
     for finding in payload["findings"]:
+        if not isinstance(finding, dict):
+            raise AgentSchemaError("findingはobjectである必要があります。")
         if finding.get("severity") not in {"Critical", "Major", "Minor", "Info"}:
             raise AgentSchemaError("finding severityが不正です。")
+        if not isinstance(finding.get("message"), str) or not finding.get("message", "").strip():
+            raise AgentSchemaError("finding messageが不正です。")
+
+
+def _parse_finding(item: dict) -> Finding:
+    normalized = dict(item)
+    if "line/range" in normalized and "line_range" not in normalized:
+        normalized["line_range"] = normalized.pop("line/range")
+    allowed = set(Finding.__dataclass_fields__)
+    return Finding(**{key: value for key, value in normalized.items() if key in allowed})
 
 
 def _build_prompt(request: EngineRequest, agent: str, previous: list[AgentResult]) -> str:
     prompt_path = Path(__file__).resolve().parent.parent / "agents" / f"{agent}.md"
     prompt = prompt_path.read_text(encoding="utf-8")
+    payload = _build_final_prompt_payload(request, previous) if agent == "final" else _build_agent_prompt_payload(
+        request, agent, previous
+    )
+    return prompt + "\n\nJSONで回答してください。\nPAYLOAD_JSON\n" + json.dumps(payload, ensure_ascii=False)
+
+
+def _build_agent_prompt_payload(request: EngineRequest, agent: str, previous: list[AgentResult]) -> dict[str, object]:
     previous_summary = [asdict(item) for item in previous[-2:]]
-    payload = {
+    return {
         "run_id": request.run_id,
         "agent": agent,
         "target": request.target,
@@ -227,7 +274,42 @@ def _build_prompt(request: EngineRequest, agent: str, previous: list[AgentResult
         "previous_results": previous_summary,
         "diff": request.diff.diff_text,
     }
-    return prompt + "\n\nJSONで回答してください。\nPAYLOAD_JSON\n" + json.dumps(payload, ensure_ascii=False)
+
+
+def _build_final_prompt_payload(request: EngineRequest, previous: list[AgentResult]) -> dict[str, object]:
+    specialist_results = [asdict(item) for item in previous if item.agent != "final"]
+    reviewer_states = {item.agent: item.status for item in previous if item.agent != "final"}
+    quality_status = [
+        {
+            "name": check.name,
+            "status": check.status,
+            "returncode": check.returncode,
+        }
+        for check in request.quality_checks
+    ]
+    return {
+        "run_id": request.run_id,
+        "agent": "final",
+        "review_target": request.target,
+        "repository": {
+            "project_id": request.repository.project_id,
+            "root": str(request.repository.root),
+            "remote_url": request.repository.remote_url,
+            "current_branch": request.repository.current_branch,
+            "head_sha": request.repository.head_sha,
+        },
+        "base_ref": request.repository.base_branch,
+        "head_ref": request.repository.current_branch,
+        "changed_files": {
+            "changed_file_count": request.diff.changed_file_count,
+            "diff_line_count": request.diff.diff_line_count,
+        },
+        "truncation_status": "truncated" if request.diff.truncated else "complete",
+        "secret_scan_status": "passed",
+        "quality_check_status": quality_status,
+        "specialist_results": specialist_results,
+        "reviewer_states": reviewer_states,
+    }
 
 
 def _failed_result(run_id: str, agent: str, reason: str) -> AgentResult:

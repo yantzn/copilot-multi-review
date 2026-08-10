@@ -6,6 +6,7 @@ import pytest
 
 from ai_review.custom_agents import (
     CustomAgentValidationError,
+    FINAL_REVIEWER,
     SPECIALIST_REVIEWERS,
     validate_custom_agent_schema,
     validate_custom_agents,
@@ -28,6 +29,7 @@ def test_review_orchestrator_agent_definition_exists_and_is_valid() -> None:
     assert orchestrator.description
     assert "agent" in orchestrator.tools
     assert set(orchestrator.agents) >= set(SPECIALIST_REVIEWERS.values())
+    assert set(orchestrator.agents) >= set(FINAL_REVIEWER.values())
     assert "Review Orchestrator" in orchestrator.instructions
     assert "Final Reviewer" in orchestrator.instructions
     assert "Subagent Result Contract" in orchestrator.instructions
@@ -42,11 +44,23 @@ def test_all_specialist_reviewer_agent_files_exist() -> None:
         assert (agents_dir / file_name).is_file()
 
 
+def test_final_reviewer_agent_definition_exists_and_is_valid() -> None:
+    definitions = validate_custom_agents(Path.cwd())
+    final = next(item for item in definitions if item.name == "Final Reviewer")
+
+    assert final.path.name == "final-reviewer.agent.md"
+    assert final.metadata.get("user-invocable") is False
+    assert final.tools
+    assert "agent" not in final.tools
+    assert final.agents is None
+
+
 def test_expected_specialist_reviewers_are_loaded() -> None:
     definitions = validate_custom_agents(Path.cwd())
     names = {definition.name for definition in definitions}
 
     assert set(SPECIALIST_REVIEWERS.values()) <= names
+    assert set(FINAL_REVIEWER.values()) <= names
 
 
 def test_specialist_reviewers_are_hidden_from_normal_agent_picker() -> None:
@@ -69,14 +83,38 @@ def test_specialist_reviewers_are_read_only_leaf_agents() -> None:
         assert {"edit", "terminal", "runCommands", "runTask", "notebookEdit"}.isdisjoint(definition.tools)
 
 
+def test_final_reviewer_is_read_only_leaf_agent() -> None:
+    definitions = validate_custom_agents(Path.cwd())
+    final = next(item for item in definitions if item.name == "Final Reviewer")
+
+    assert final.tools
+    assert "agent" not in final.tools
+    assert final.agents is None
+    assert {"edit", "terminal", "runCommands", "runTask", "notebookEdit"}.isdisjoint(final.tools)
+    for forbidden in [
+        "git commit",
+        "git push",
+        "git merge",
+        "git reset",
+        "git checkout",
+        "git clean",
+        "git rebase",
+        "git tag",
+    ]:
+        assert forbidden in final.instructions
+
+
 def test_orchestrator_delegates_to_all_specialist_reviewers() -> None:
     definitions = validate_custom_agents(Path.cwd())
     orchestrator = next(item for item in definitions if item.name == "Review Orchestrator")
 
     assert isinstance(orchestrator.agents, list)
     assert set(SPECIALIST_REVIEWERS.values()) <= set(orchestrator.agents)
+    assert set(FINAL_REVIEWER.values()) <= set(orchestrator.agents)
     for reviewer_name in SPECIALIST_REVIEWERS.values():
         assert reviewer_name in orchestrator.instructions
+    assert "Final Reviewer Input Contract" in orchestrator.instructions
+    assert "Keep specialist reviewers independent" in orchestrator.instructions
 
 
 def test_specialist_reviewers_include_common_finding_contract() -> None:
@@ -112,6 +150,72 @@ def test_specialist_reviewers_document_independent_evaluation() -> None:
         assert "do not use other reviewer results before review" in instructions
         assert "previous reviewer conclusions" in instructions
         assert "independently evaluate the same diff/context" in instructions
+
+
+def test_final_reviewer_documents_input_contract() -> None:
+    definitions = validate_custom_agents(Path.cwd())
+    final = next(item for item in definitions if item.name == "Final Reviewer")
+
+    for term in [
+        "review_target",
+        "repository",
+        "base_ref",
+        "head_ref",
+        "changed_files",
+        "truncation_status",
+        "secret_scan_status",
+        "quality_check_status",
+        "specialist_results",
+        "reviewer_states",
+    ]:
+        assert term in final.instructions
+
+
+def test_final_reviewer_documents_dedup_and_provenance_contract() -> None:
+    definitions = validate_custom_agents(Path.cwd())
+    final = next(item for item in definitions if item.name == "Final Reviewer")
+    instructions = final.instructions.lower()
+
+    assert "merge duplicate findings" in instructions
+    assert "semantic similarity" in instructions
+    assert "reported_by" in final.instructions
+    assert "reported_severities" in final.instructions
+    assert "Critical and Major" in final.instructions
+
+
+def test_final_reviewer_documents_severity_conflict_resolution() -> None:
+    definitions = validate_custom_agents(Path.cwd())
+    final = next(item for item in definitions if item.name == "Final Reviewer")
+
+    assert "Critical > Major > Minor > Info" in final.instructions
+    assert "severity_conflict: true" in final.instructions
+    assert "choose the highest severity" in final.instructions
+
+
+def test_final_reviewer_documents_conflicts_and_incomplete_review() -> None:
+    definitions = validate_custom_agents(Path.cwd())
+    final = next(item for item in definitions if item.name == "Final Reviewer")
+    instructions = final.instructions.lower()
+
+    assert "do not hide clear contradictions" in instructions
+    assert "conflicts" in instructions
+    assert "failed" in instructions
+    assert "missing" in instructions
+    assert "not_run" in instructions
+    assert "incomplete_review" in instructions
+    assert "do not propose unconditional `approve`" in instructions
+    assert "truncated" in instructions
+    assert "INCONCLUSIVE" in final.instructions
+
+
+def test_final_reviewer_uses_existing_decision_vocabulary() -> None:
+    definitions = validate_custom_agents(Path.cwd())
+    final = next(item for item in definitions if item.name == "Final Reviewer")
+
+    for decision in ["APPROVE", "APPROVE_WITH_NOTES", "CHANGES_REQUIRED", "BLOCKED", "INCONCLUSIVE"]:
+        assert decision in final.instructions
+    assert "AI synthesis decision candidate" in final.instructions
+    assert "stricter_decision" in final.instructions
 
 
 def test_list_tools_are_valid(tmp_path: Path) -> None:

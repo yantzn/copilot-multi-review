@@ -39,6 +39,15 @@ class Finding:
     message: str
     file: str | None = None
     line: int | None = None
+    category: str | None = None
+    range: str | None = None
+    line_range: str | None = None
+    rationale: str | None = None
+    recommendation: str | None = None
+    confidence: str | None = None
+    reported_by: list[str] | None = None
+    reported_severities: list[str] | None = None
+    severity_conflict: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -51,6 +60,9 @@ class AgentResult:
     findings: list[Finding]
     summary: str
     status: str = "completed"
+    reviewer_states: dict[str, str] | None = None
+    conflicts: list[dict[str, object]] | None = None
+    incomplete_review: bool | None = None
 
 
 def rule_based_decision(results: list[AgentResult], *, truncated: bool = False, failed: bool = False) -> str:
