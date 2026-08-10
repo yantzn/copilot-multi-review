@@ -18,7 +18,20 @@ from .secrets import scan_diff_for_secrets
 
 SPECIALIST_AGENTS = [agent for agent in AGENT_ORDER if agent != "final"]
 VALID_EXECUTION_MODES = {"subagent", "legacy"}
-INCOMPLETE_REVIEWER_STATES = {"failed", "missing", "skipped", "not_run", "blocked", "inconclusive", "cancelled"}
+VALID_REVIEWER_STATES = {
+    "pending",
+    "running",
+    "delegated",
+    "completed",
+    "failed",
+    "missing",
+    "skipped",
+    "not_run",
+    "blocked",
+    "inconclusive",
+    "cancelled",
+}
+INCOMPLETE_REVIEWER_STATES = VALID_REVIEWER_STATES - {"completed"}
 
 
 class ReviewEngineError(RuntimeError):
@@ -291,7 +304,9 @@ def parse_agent_response(raw: str, *, run_id: str, agent: str) -> AgentResult:
 
 
 def parse_subagent_final_response(raw: str, *, run_id: str) -> AgentResult:
-    return parse_agent_response(raw, run_id=run_id, agent="final")
+    result = parse_agent_response(raw, run_id=run_id, agent="final")
+    _validate_subagent_reviewer_states(result.reviewer_states)
+    return result
 
 
 def _run_agent_with_retry(client: CopilotClient, prompt: str, request: EngineRequest, agent: str) -> AgentResult:
@@ -516,6 +531,32 @@ def _normalize_reviewer_states(reviewer_states: dict[str, str] | None) -> dict[s
         if key in AGENT_ORDER and isinstance(state, str):
             normalized[key] = state
     return normalized
+
+
+def _validate_subagent_reviewer_states(reviewer_states: dict[str, str] | None) -> None:
+    if not reviewer_states:
+        raise AgentSchemaError("subagent final result must include reviewer_states")
+
+    normalized: dict[str, str] = {}
+    unknown_reviewers: list[str] = []
+    invalid_states: list[str] = []
+    for reviewer, state in reviewer_states.items():
+        key = _canonical_agent_key(reviewer)
+        if key not in SPECIALIST_AGENTS:
+            unknown_reviewers.append(reviewer)
+            continue
+        if not isinstance(state, str) or state not in VALID_REVIEWER_STATES:
+            invalid_states.append(f"{reviewer}={state!r}")
+            continue
+        normalized[key] = state
+
+    missing = set(SPECIALIST_AGENTS) - set(normalized)
+    if unknown_reviewers:
+        raise AgentSchemaError(f"unknown reviewer_states reviewers: {', '.join(sorted(unknown_reviewers))}")
+    if invalid_states:
+        raise AgentSchemaError(f"invalid reviewer_states values: {', '.join(sorted(invalid_states))}")
+    if missing:
+        raise AgentSchemaError(f"missing reviewer_states reviewers: {', '.join(sorted(missing))}")
 
 
 def _canonical_agent_key(value: str) -> str:

@@ -382,6 +382,90 @@ def test_reviewer_failure_is_not_success(tmp_path: Path) -> None:
     assert result.final_decision == "INCONCLUSIVE"
 
 
+def test_missing_reviewer_states_is_not_success(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path / "repo")
+
+    class MissingReviewerStatesClient(FakeClient):
+        def run_prompt(self, prompt: str, *, timeout_seconds: int) -> str:
+            payload = json.loads(prompt.split("PAYLOAD_JSON\n", 1)[1].splitlines()[0])
+            self.calls.append(payload.get("agent", "review-orchestrator"))
+            return json.dumps(
+                {
+                    "run_id": payload["run_id"],
+                    "agent": "final",
+                    "provider": "github-copilot-cli",
+                    "schema_version": "0.1.0",
+                    "status": "completed",
+                    "decision": "APPROVE",
+                    "findings": [],
+                    "summary": "ok",
+                }
+            )
+
+    result = run_review_engine(request_for(repo), MissingReviewerStatesClient())
+
+    assert result.agent_states["final"] == "failed"
+    assert result.final_decision == "INCONCLUSIVE"
+
+
+def test_unknown_reviewer_state_is_not_silently_ignored(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path / "repo")
+
+    class UnknownReviewerClient(FakeClient):
+        def run_prompt(self, prompt: str, *, timeout_seconds: int) -> str:
+            payload = json.loads(prompt.split("PAYLOAD_JSON\n", 1)[1].splitlines()[0])
+            self.calls.append(payload.get("agent", "review-orchestrator"))
+            states = {agent: "completed" for agent in AGENT_ORDER[:-1]}
+            states["surprise-reviewer"] = "completed"
+            return json.dumps(
+                {
+                    "run_id": payload["run_id"],
+                    "agent": "final",
+                    "provider": "github-copilot-cli",
+                    "schema_version": "0.1.0",
+                    "status": "completed",
+                    "decision": "APPROVE",
+                    "findings": [],
+                    "summary": "ok",
+                    "reviewer_states": states,
+                }
+            )
+
+    result = run_review_engine(request_for(repo), UnknownReviewerClient())
+
+    assert result.agent_states["final"] == "failed"
+    assert result.final_decision == "INCONCLUSIVE"
+
+
+def test_delegated_reviewer_state_is_incomplete(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path / "repo")
+
+    class DelegatedReviewerClient(FakeClient):
+        def run_prompt(self, prompt: str, *, timeout_seconds: int) -> str:
+            payload = json.loads(prompt.split("PAYLOAD_JSON\n", 1)[1].splitlines()[0])
+            self.calls.append(payload.get("agent", "review-orchestrator"))
+            states = {agent: "completed" for agent in AGENT_ORDER[:-1]}
+            states["security"] = "delegated"
+            return json.dumps(
+                {
+                    "run_id": payload["run_id"],
+                    "agent": "final",
+                    "provider": "github-copilot-cli",
+                    "schema_version": "0.1.0",
+                    "status": "completed",
+                    "decision": "APPROVE",
+                    "findings": [],
+                    "summary": "security reviewer still delegated",
+                    "reviewer_states": states,
+                }
+            )
+
+    result = run_review_engine(request_for(repo), DelegatedReviewerClient())
+
+    assert result.agent_states["security"] == "delegated"
+    assert result.final_decision == "INCONCLUSIVE"
+
+
 def test_subagent_final_adapter_rejects_unknown_top_level_field() -> None:
     raw = json.dumps(
         {
