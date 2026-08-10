@@ -29,15 +29,29 @@ BANNED_REVIEW_TOOLS = {
     "notebookEdit",
 }
 
+SPECIALIST_REVIEWERS = {
+    "requirements-reviewer.agent.md": "Requirements Reviewer",
+    "correctness-reviewer.agent.md": "Correctness Reviewer",
+    "security-reviewer.agent.md": "Security Reviewer",
+    "testing-reviewer.agent.md": "Testing Reviewer",
+    "maintainability-reviewer.agent.md": "Maintainability Reviewer",
+    "performance-reviewer.agent.md": "Performance Reviewer",
+    "operations-reviewer.agent.md": "Operations Reviewer",
+    "devil-advocate.agent.md": "Devil Advocate",
+}
+
+ORCHESTRATOR_NAME = "Review Orchestrator"
+
 
 def validate_custom_agents(
     root: Path | None = None,
     *,
     enforce_review_policy: bool = True,
+    require_specialist_reviewers: bool = True,
 ) -> list[CustomAgentDefinition]:
     definitions = validate_custom_agent_schema(root)
     if enforce_review_policy:
-        validate_review_agent_policy(definitions)
+        validate_review_agent_policy(definitions, require_specialist_reviewers=require_specialist_reviewers)
     return definitions
 
 
@@ -63,7 +77,24 @@ def validate_custom_agent_schema(root: Path | None = None) -> list[CustomAgentDe
     return definitions
 
 
-def validate_review_agent_policy(definitions: list[CustomAgentDefinition]) -> None:
+def validate_review_agent_policy(
+    definitions: list[CustomAgentDefinition],
+    *,
+    require_specialist_reviewers: bool = True,
+) -> None:
+    by_file = {definition.path.name: definition for definition in definitions}
+    by_name = {definition.name: definition for definition in definitions}
+
+    orchestrator = by_name.get(ORCHESTRATOR_NAME)
+    if require_specialist_reviewers:
+        missing_files = sorted(set(SPECIALIST_REVIEWERS) - set(by_file))
+        if missing_files:
+            raise CustomAgentValidationError(
+                f"review-only policy requires specialist reviewer agents: {', '.join(missing_files)}"
+            )
+        if orchestrator is None:
+            raise CustomAgentValidationError("review-only policy requires Review Orchestrator")
+
     for definition in definitions:
         tools = definition.tools
         if tools is None:
@@ -77,6 +108,36 @@ def validate_review_agent_policy(definitions: list[CustomAgentDefinition]) -> No
         if definition.agents is not None and "agent" not in tools:
             raise CustomAgentValidationError(
                 f"{definition.path}: review-only policy requires the agent tool when agents are configured"
+            )
+
+    expected_names = set(SPECIALIST_REVIEWERS.values())
+    if orchestrator is not None and orchestrator.agents != "*" and not (
+        isinstance(orchestrator.agents, list) and expected_names <= set(orchestrator.agents)
+    ):
+        if require_specialist_reviewers or expected_names & set(orchestrator.agents or []):
+            raise CustomAgentValidationError(
+                f"{orchestrator.path}: review-only policy requires orchestrator access to all specialist reviewers"
+            )
+
+    for file_name, expected_name in SPECIALIST_REVIEWERS.items():
+        definition = by_file.get(file_name)
+        if definition is None:
+            continue
+        if definition.name != expected_name:
+            raise CustomAgentValidationError(
+                f"{definition.path}: review-only policy expects agent name {expected_name!r}"
+            )
+        if definition.metadata.get("user-invocable") is not False:
+            raise CustomAgentValidationError(
+                f"{definition.path}: review-only policy requires user-invocable: false"
+            )
+        if definition.agents is not None:
+            raise CustomAgentValidationError(
+                f"{definition.path}: specialist reviewers must not configure subagents"
+            )
+        if definition.tools and "agent" in definition.tools:
+            raise CustomAgentValidationError(
+                f"{definition.path}: specialist reviewers must not enable the agent tool"
             )
 
 

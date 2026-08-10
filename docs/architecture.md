@@ -162,3 +162,18 @@ Custom Agent validation has two layers:
 - Review-only policy validation checks whether this repository's review agents satisfy the local safety requirements.
 
 An omitted `tools` field is not a general GitHub / VS Code Custom Agent schema error. For `copilot-multi-review` review-only agents, however, `tools` must be explicitly declared so the validator can verify that editing and terminal capabilities are not enabled.
+
+### Specialist Reviewer Boundaries
+
+Issue #25 adds eight read-only Custom Agent specialist reviewers. They are leaf subagents: the Review Orchestrator may invoke them, but they must not invoke other agents, edit files, run terminal commands, or write review artifacts into the target repository. Each reviewer receives the same primary diff/context and evaluates it independently. Specialist reviewers do not receive `previous_findings`; reviewer results are aggregated only after specialist execution for a later final integration phase.
+
+| Reviewer | Primary responsibility | Should report | Should defer to |
+| --- | --- | --- | --- |
+| `requirements` / `Requirements Reviewer` | Requirements, Issue text, acceptance criteria, user request, README and architecture alignment | Requirement gaps, acceptance criteria misses, scope drift, compatibility violations | implementation logic details, security mechanics, test quality |
+| `correctness` / `Correctness Reviewer` | Implementation logic, data flow, state transitions, edge cases, error handling | Bugs, invalid states, broken error propagation, incorrect API use | requirement interpretation, security impact, test adequacy |
+| `security` / `Security Reviewer` | Auth, authorization, secrets, command execution, injection, path traversal, unsafe subprocess and GitHub Actions risks | Secret leakage, unsafe command execution, permission flaws, unsafe git or repository mutation | general maintainability, pure correctness bugs, test coverage |
+| `testing` / `Testing Reviewer` | Meaningful test coverage for changed behavior, abnormal paths, boundary cases, regressions, and mocks | Specific untested behavior and the failure it would miss | whether requirements are correct, whether implementation logic is defective |
+| `maintainability` / `Maintainability Reviewer` | Responsibility boundaries, duplication, readability, naming, cohesion, coupling, extension cost | Issues that materially raise future change or understanding cost | pure requirements, security, correctness, performance, or operations findings |
+| `performance` / `Performance Reviewer` | Meaningful runtime, I/O, memory, scaling, large-diff, repeated work, and subprocess cost | Concrete stability, latency, memory, or scalability risks | style preferences, ordinary maintainability, pure correctness |
+| `operations` / `Operations Reviewer` | Runtime behavior, diagnostics, locks, cancellation, rerun, Windows/Linux differences, CLI UX, installation | Recovery, observability, lock cleanup, encoding, Copilot CLI detection, and configuration risks | implementation logic, security vulnerabilities, test coverage |
+| `devil_advocate` / `Devil Advocate` | Independent challenge of assumptions, fail-open behavior, surprising user paths, migration and compatibility risks | Plausible hidden assumptions or feature interaction risks | critiquing other reviewers, final synthesis, detailed specialist findings |
