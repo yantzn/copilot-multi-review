@@ -10,6 +10,7 @@ from .copilot import (
     ensure_supported_python,
     get_copilot_version,
 )
+from .custom_agents import CustomAgentValidationError, validate_custom_agents
 from .diff_collector import DiffCollectionError, collect_diff
 from .quality import UnsafeCommandError, run_quality_checks
 from .repository import RepositoryError, resolve_repository
@@ -96,9 +97,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def handle_validate_config(_args: argparse.Namespace) -> int:
     info = get_copilot_version()
+    custom_agents = validate_custom_agents()
     print("設定検証に成功しました。")
     print(f"Copilot CLI: {info.executable}")
     print(f"Version: {info.version}")
+    print(f"Custom agents: {len(custom_agents)}")
     return 0
 
 
@@ -233,6 +236,9 @@ def main(argv: list[str] | None = None) -> int:
         print(str(exc), file=sys.stderr)
         return 2
     except CopilotError as exc:
+        print(str(exc), file=sys.stderr)
+        return 3
+    except CustomAgentValidationError as exc:
         print(str(exc), file=sys.stderr)
         return 3
     except CommandNotImplementedError as exc:
