@@ -96,6 +96,19 @@ headless環境ではCLIを使います。
 python -m ai_review review --repo <path> --target base
 ```
 
+### Copilot Chat Custom Agent
+
+VS Code Copilot Chatでは、Agent選択UIから`Review Orchestrator`を選択できます。
+
+```text
+VS Code
+-> Copilot Chat
+-> Agent selection
+-> Review Orchestrator
+```
+
+`Review Orchestrator`はレビュー専用の入口です。詳細レビューは専門Subagentへ委譲し、Python ReviewEngine / CLIレビュー経路は維持します。詳しい責務境界は`docs/architecture.md`を参照してください。
+
 ## エージェント
 
 1つのGitHub Copilot CLIを、次の9種類の論理エージェントとして完全に直列実行します。最大同時Copilot呼び出し数は1です。

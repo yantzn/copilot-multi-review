@@ -67,3 +67,89 @@ The implementation does not use thread pools, parallel subprocesses, or `asyncio
 `run.json` stores repository metadata, target, request, diff size, quality check summaries, agent states, Copilot CLI version, run ID, and timestamps. It does not store complete prompts, unchecked diffs, or secret values.
 
 Locks are acquired with exclusive file creation and released only when owner and generation match.
+
+## Copilot Custom Agent Review Orchestration
+
+Issue #24 adds a VS Code / GitHub Copilot Custom Agent entry point without replacing the Python ReviewEngine. The two review paths are intentionally separate so the project can migrate in stages.
+
+The Custom Agent path is for human-facing orchestration in Copilot Chat:
+
+```mermaid
+flowchart TD
+  U["User"] --> C["VS Code Copilot Chat"]
+  C --> O["Review Orchestrator"]
+  O --> R["Requirements Reviewer"]
+  O --> K["Correctness Reviewer"]
+  O --> S["Security Reviewer"]
+  O --> T["Testing Reviewer"]
+  O --> M["Maintainability Reviewer"]
+  O --> P["Performance Reviewer"]
+  O --> OP["Operations Reviewer"]
+  O --> D["Devil Advocate Reviewer"]
+  R --> F["Final Reviewer"]
+  K --> F
+  S --> F
+  T --> F
+  M --> F
+  P --> F
+  OP --> F
+  D --> F
+```
+
+The existing CLI path remains the source of the current automated local review flow:
+
+```mermaid
+flowchart TD
+  A["VS Code launch / CLI"] --> B["Python ReviewEngine"]
+  B --> C["Copilot CLI"]
+```
+
+### Python ReviewEngine Responsibilities
+
+The Python side remains responsible for:
+
+- git diff collection
+- target repository resolution
+- base/head resolution
+- secret detection
+- quality checks
+- execution locks
+- cancellation
+- runtime management
+- report and history persistence
+- CLI commands
+- VS Code launch integration
+- Copilot CLI process startup
+- the existing serial reviewer execution flow
+- safety constraints for local execution
+
+The Python ReviewEngine is not removed or replaced by Custom Agents in this issue.
+
+### Copilot Custom Agent Responsibilities
+
+The Custom Agent side is responsible for:
+
+- human-facing review entry through VS Code Copilot Chat
+- Review Orchestrator behavior
+- specialist reviewer selection
+- delegation to reviewer subagents when those subagents exist
+- collection and tracking of reviewer results
+- delegation of final synthesis to the Final Reviewer when available
+- explanation of agent execution state to the user
+
+The Review Orchestrator must not perform detailed requirements, correctness, security, testing, maintainability, performance, operations, devil advocate, or final decision review itself. It coordinates specialist work and reports missing, failed, blocked, or inconclusive reviewer outcomes.
+
+### Boundary Rules
+
+The design forbids:
+
+- deleting the Python ReviewEngine
+- moving the entire CLI review flow into Custom Agents
+- implementing duplicate git diff collection in both Python and Custom Agents
+- implementing duplicate secret scanning in both Python and Custom Agents
+- adding independent git mutation logic to the Orchestrator
+- allowing the Orchestrator to commit, push, merge, reset, checkout, clean, rebase, or tag
+- allowing automatic fixes or generated code application from the Orchestrator
+- writing review result files into the target repository
+
+Custom Agents may receive diff/context that was already collected by the user or Python tooling, but they must not hide truncation, secret scan failures, quality check failures, missing context, failed reviewers, or unrun reviewers.
