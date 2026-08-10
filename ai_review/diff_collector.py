@@ -28,6 +28,7 @@ class DiffSummary:
     changed_file_count: int
     diff_line_count: int
     truncated: bool
+    truncation_reason: str | None = None
     warnings: list[str] = field(default_factory=list)
     requirements_context: list[str] = field(default_factory=list)
 
@@ -67,6 +68,7 @@ def collect_diff(
     if target == "uncommitted":
         diff_text += _pseudo_diff_for_untracked(repository.root, safe_files)
     truncated = len(diff_text.encode("utf-8", errors="replace")) > MAX_DIFF_BYTES
+    truncation_reason = "max_diff_bytes" if truncated else None
     if truncated:
         warnings.append("差分が上限を超えたため切り捨てました。")
         diff_text = diff_text.encode("utf-8", errors="replace")[:MAX_DIFF_BYTES].decode("utf-8", errors="replace")
@@ -78,6 +80,7 @@ def collect_diff(
         changed_file_count=len(safe_files),
         diff_line_count=diff_line_count,
         truncated=truncated,
+        truncation_reason=truncation_reason,
         warnings=warnings,
         requirements_context=_collect_requirements_context(repository.root, exclude_patterns),
     )
