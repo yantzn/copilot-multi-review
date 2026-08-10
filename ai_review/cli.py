@@ -145,6 +145,8 @@ def handle_review(args: argparse.Namespace) -> int:
     print(f"Changed files: {diff.changed_file_count}")
     print(f"Diff lines: {diff.diff_line_count}")
     print(f"Truncated: {diff.truncated}")
+    if diff.truncation_reason:
+        print(f"Truncation reason: {diff.truncation_reason}")
     print(f"Requirements context: {', '.join(diff.requirements_context) or '(none)'}")
     secret_scan = scan_diff_for_secrets(diff)
     print(f"Secret findings: {len(secret_scan.findings)}")

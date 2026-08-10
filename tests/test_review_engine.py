@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from enum import Enum
 from pathlib import Path
 import json
 import subprocess
@@ -8,9 +9,10 @@ import time
 
 import pytest
 
-from ai_review.diff_collector import collect_diff
+from ai_review.diff_collector import ChangedFile, DiffSummary, collect_diff
 from ai_review.agents import AGENT_ORDER, stricter_decision
 from ai_review.quality import QualityCheckResult
+from ai_review.repository import RepositoryContext
 from ai_review.repository import resolve_repository
 from ai_review.review_engine import (
     AgentCancelledError,
@@ -19,6 +21,9 @@ from ai_review.review_engine import (
     CopilotClient,
     EngineRequest,
     ReviewEngineError,
+    _build_orchestrator_payload,
+    _build_orchestrator_prompt,
+    _to_json_serializable,
     parse_agent_response,
     parse_subagent_final_response,
     run_review_engine,
@@ -80,6 +85,39 @@ def request_for(repo: Path, *, agent: str | None = None, run_id: str = "run-1") 
         run_id=run_id,
         agent=agent,
     )
+
+
+def static_request(tmp_path: Path, *, changed_files: list[ChangedFile], truncated: bool = False) -> EngineRequest:
+    repository = RepositoryContext(
+        input_path=tmp_path,
+        root=tmp_path,
+        git_common_dir=tmp_path / ".git",
+        remote_url="https://github.com/yantzn/copilot-multi-review.git",
+        current_branch="feature",
+        head_sha="abc123",
+        base_branch="main",
+        project_id="github.com__yantzn__copilot-multi-review",
+    )
+    diff = DiffSummary(
+        target="base",
+        changed_files=changed_files,
+        diff_text="diff --git a/app.py b/app.py\n+print('hello')\n",
+        changed_file_count=len(changed_files),
+        diff_line_count=1,
+        truncated=truncated,
+        truncation_reason="max_diff_bytes" if truncated else None,
+    )
+    return EngineRequest(
+        repository=repository,
+        diff=diff,
+        quality_checks=[QualityCheckResult(name="quality", command=[], status="skipped")],
+        target="base",
+        run_id="run-static",
+    )
+
+
+class PayloadKind(Enum):
+    PRIMARY = "primary"
 
 
 def test_standard_path_invokes_orchestrator_once_not_nine_agents(tmp_path: Path) -> None:
@@ -294,6 +332,89 @@ def test_standard_orchestrator_receives_sanitized_context_without_previous_resul
     forbidden = {"previous_results", "prior_findings", "other_reviewer_results"}
     assert forbidden.isdisjoint(payload)
     assert payload["constraints"]["no_previous_results_for_specialists"] is True
+
+
+def test_orchestrator_prompt_serializes_changed_file_payload(tmp_path: Path) -> None:
+    request = static_request(
+        tmp_path,
+        changed_files=[ChangedFile(status="M", path="ai_review/review_engine.py", old_path=None)],
+    )
+
+    prompt = _build_orchestrator_prompt(request)
+    payload = json.loads(prompt.split("PAYLOAD_JSON\n", 1)[1].splitlines()[0])
+
+    assert payload["run_id"] == "run-static"
+    assert payload["changed_files"]["changed_file_count"] == 1
+    assert payload["changed_files"]["files"] == [
+        {
+            "status": "M",
+            "path": "ai_review/review_engine.py",
+            "old_path": None,
+            "binary": False,
+            "rejected_reason": None,
+        }
+    ]
+    assert payload["common_output_schema"] == "schemas/agent-result.schema.json"
+
+
+def test_orchestrator_prompt_serializes_multiple_changed_files(tmp_path: Path) -> None:
+    request = static_request(
+        tmp_path,
+        changed_files=[
+            ChangedFile(status="M", path="app.py"),
+            ChangedFile(status="R", path="new name.py", old_path="old name.py"),
+        ],
+    )
+
+    payload = json.loads(_build_orchestrator_prompt(request).split("PAYLOAD_JSON\n", 1)[1].splitlines()[0])
+
+    assert [item["path"] for item in payload["changed_files"]["files"]] == ["app.py", "new name.py"]
+    assert payload["changed_files"]["files"][1]["old_path"] == "old name.py"
+
+
+def test_orchestrator_payload_keeps_truncation_contract(tmp_path: Path) -> None:
+    request = static_request(tmp_path, changed_files=[ChangedFile(status="M", path="app.py")], truncated=True)
+
+    payload = json.loads(_build_orchestrator_prompt(request).split("PAYLOAD_JSON\n", 1)[1].splitlines()[0])
+
+    assert payload["truncation_status"] == "truncated"
+    assert payload["truncation_reason"] == "max_diff_bytes"
+    assert payload["secret_scan_status"] == "passed"
+    assert payload["common_output_schema"] == "schemas/agent-result.schema.json"
+    assert "Return only the Final Reviewer AgentResult JSON object." in _build_orchestrator_prompt(request)
+
+
+def test_json_serializable_payload_handles_path_enum_tuple_and_dataclass(tmp_path: Path) -> None:
+    converted = _to_json_serializable(
+        {
+            "path": tmp_path / "app.py",
+            "kind": PayloadKind.PRIMARY,
+            "items": (ChangedFile(status="A", path="app.py"),),
+        }
+    )
+
+    assert converted == {
+        "path": str(tmp_path / "app.py"),
+        "kind": "primary",
+        "items": [
+            {
+                "status": "A",
+                "path": "app.py",
+                "old_path": None,
+                "binary": False,
+                "rejected_reason": None,
+            }
+        ],
+    }
+    json.dumps(converted)
+
+
+def test_orchestrator_payload_builder_may_return_dataclasses_before_dump(tmp_path: Path) -> None:
+    request = static_request(tmp_path, changed_files=[ChangedFile(status="M", path="app.py")])
+
+    payload = _build_orchestrator_payload(request)
+
+    assert payload["changed_files"]["files"] == request.diff.changed_files
 
 
 def test_python_final_prompt_documents_integration_contract() -> None:

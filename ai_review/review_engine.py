@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from collections import deque
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timezone
+from enum import Enum
 import json
 from pathlib import Path
 import subprocess
@@ -631,7 +632,7 @@ def _build_prompt(request: EngineRequest, agent: str, previous: list[AgentResult
     payload = _build_final_prompt_payload(request, previous) if agent == "final" else _build_agent_prompt_payload(
         request, agent
     )
-    return prompt + "\n\nReturn only one JSON object.\nPAYLOAD_JSON\n" + json.dumps(payload, ensure_ascii=False)
+    return prompt + "\n\nReturn only one JSON object.\nPAYLOAD_JSON\n" + _json_dumps_payload(payload)
 
 
 def _build_agent_prompt_payload(request: EngineRequest, agent: str) -> dict[str, object]:
@@ -652,8 +653,8 @@ def _build_orchestrator_prompt(request: EngineRequest) -> str:
     prompt_path = Path(__file__).resolve().parent.parent / ".github" / "agents" / "review-orchestrator.agent.md"
     prompt = prompt_path.read_text(encoding="utf-8")
     payload = _build_orchestrator_payload(request)
-    return prompt + "\n\nReturn only the Final Reviewer AgentResult JSON object.\nPAYLOAD_JSON\n" + json.dumps(
-        payload, ensure_ascii=False
+    return prompt + "\n\nReturn only the Final Reviewer AgentResult JSON object.\nPAYLOAD_JSON\n" + _json_dumps_payload(
+        payload
     )
 
 
@@ -685,6 +686,7 @@ def _build_orchestrator_payload(request: EngineRequest) -> dict[str, object]:
             "no_previous_results_for_specialists": True,
         },
         "truncation_status": "truncated" if request.diff.truncated else "complete",
+        "truncation_reason": request.diff.truncation_reason,
         "secret_scan_status": "passed",
         "quality_check_status": [
             {
@@ -728,6 +730,7 @@ def _build_final_prompt_payload(request: EngineRequest, previous: list[AgentResu
             "diff_line_count": request.diff.diff_line_count,
         },
         "truncation_status": "truncated" if request.diff.truncated else "complete",
+        "truncation_reason": request.diff.truncation_reason,
         "secret_scan_status": "passed",
         "quality_check_status": quality_status,
         "specialist_results": specialist_results,
@@ -746,6 +749,39 @@ def _failed_result(run_id: str, agent: str, reason: str) -> AgentResult:
         summary=reason,
         status="failed",
     )
+
+
+def _json_dumps_payload(payload: object) -> str:
+    return json.dumps(_to_json_serializable(payload), ensure_ascii=False)
+
+
+def _to_json_serializable(value: object) -> object:
+    if value is None or isinstance(value, str | int | float | bool):
+        return value
+    if isinstance(value, Enum):
+        return _to_json_serializable(value.value)
+    if isinstance(value, Path):
+        return str(value)
+    if is_dataclass(value) and not isinstance(value, type):
+        return _to_json_serializable(asdict(value))
+    if isinstance(value, list | tuple):
+        return [_to_json_serializable(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            _to_json_dict_key(key): _to_json_serializable(item)
+            for key, item in value.items()
+        }
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def _to_json_dict_key(value: object) -> str:
+    if isinstance(value, Enum):
+        return str(value.value)
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, str | int | float | bool) or value is None:
+        return str(value)
+    raise TypeError(f"Object of type {type(value).__name__} cannot be used as a JSON object key")
 
 
 def _with_timing(
