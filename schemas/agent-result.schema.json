@@ -8,6 +8,9 @@
     "agent": { "type": "string" },
     "provider": { "const": "github-copilot-cli" },
     "schema_version": { "type": "string" },
+    "status": {
+      "enum": ["completed", "inconclusive", "blocked", "failed"]
+    },
     "decision": {
       "enum": ["APPROVE", "APPROVE_WITH_NOTES", "CHANGES_REQUIRED", "BLOCKED", "INCONCLUSIVE"]
     },
@@ -20,10 +23,34 @@
           "severity": { "enum": ["Critical", "Major", "Minor", "Info"] },
           "message": { "type": "string" },
           "file": { "type": ["string", "null"] },
-          "line": { "type": ["integer", "null"] }
+          "line": { "type": ["integer", "null"] },
+          "category": { "type": ["string", "null"] },
+          "range": { "type": ["string", "null"] },
+          "line_range": { "type": ["string", "null"] },
+          "rationale": { "type": ["string", "null"] },
+          "recommendation": { "type": ["string", "null"] },
+          "confidence": { "type": ["string", "null"] },
+          "reported_by": {
+            "type": ["array", "null"],
+            "items": { "type": "string" }
+          },
+          "reported_severities": {
+            "type": ["array", "null"],
+            "items": { "enum": ["Critical", "Major", "Minor", "Info"] }
+          },
+          "severity_conflict": { "type": ["boolean", "null"] }
         }
       }
     },
-    "summary": { "type": "string" }
+    "summary": { "type": "string" },
+    "reviewer_states": {
+      "type": ["object", "null"],
+      "additionalProperties": { "type": "string" }
+    },
+    "conflicts": {
+      "type": ["array", "null"],
+      "items": { "type": "object" }
+    },
+    "incomplete_review": { "type": ["boolean", "null"] }
   }
 }

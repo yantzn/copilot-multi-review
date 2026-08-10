@@ -40,7 +40,12 @@ SPECIALIST_REVIEWERS = {
     "devil-advocate.agent.md": "Devil Advocate",
 }
 
-ORCHESTRATOR_NAME = "Review Orchestrator"
+FINAL_REVIEWER = {
+    "final-reviewer.agent.md": "Final Reviewer",
+}
+
+ORCHESTRATOR = "Review Orchestrator"
+ORCHESTRATOR_NAME = ORCHESTRATOR
 
 
 def validate_custom_agents(
@@ -82,18 +87,7 @@ def validate_review_agent_policy(
     *,
     require_specialist_reviewers: bool = True,
 ) -> None:
-    by_file = {definition.path.name: definition for definition in definitions}
-    by_name = {definition.name: definition for definition in definitions}
-
-    orchestrator = by_name.get(ORCHESTRATOR_NAME)
-    if require_specialist_reviewers:
-        missing_files = sorted(set(SPECIALIST_REVIEWERS) - set(by_file))
-        if missing_files:
-            raise CustomAgentValidationError(
-                f"review-only policy requires specialist reviewer agents: {', '.join(missing_files)}"
-            )
-        if orchestrator is None:
-            raise CustomAgentValidationError("review-only policy requires Review Orchestrator")
+    validate_review_topology(definitions, require_specialist_reviewers=require_specialist_reviewers)
 
     for definition in definitions:
         tools = definition.tools
@@ -110,14 +104,39 @@ def validate_review_agent_policy(
                 f"{definition.path}: review-only policy requires the agent tool when agents are configured"
             )
 
-    expected_names = set(SPECIALIST_REVIEWERS.values())
+    _validate_leaf_reviewers(definitions)
+
+
+def validate_review_topology(
+    definitions: list[CustomAgentDefinition],
+    *,
+    require_specialist_reviewers: bool = True,
+) -> None:
+    by_file = {definition.path.name: definition for definition in definitions}
+    by_name = {definition.name: definition for definition in definitions}
+
+    orchestrator = by_name.get(ORCHESTRATOR)
+    if require_specialist_reviewers:
+        missing_files = sorted((set(SPECIALIST_REVIEWERS) | set(FINAL_REVIEWER)) - set(by_file))
+        if missing_files:
+            raise CustomAgentValidationError(
+                f"review-only policy requires review agents: {', '.join(missing_files)}"
+            )
+        if orchestrator is None:
+            raise CustomAgentValidationError("review-only policy requires Review Orchestrator")
+
+    expected_names = set(SPECIALIST_REVIEWERS.values()) | set(FINAL_REVIEWER.values())
     if orchestrator is not None and orchestrator.agents != "*" and not (
         isinstance(orchestrator.agents, list) and expected_names <= set(orchestrator.agents)
     ):
         if require_specialist_reviewers or expected_names & set(orchestrator.agents or []):
             raise CustomAgentValidationError(
-                f"{orchestrator.path}: review-only policy requires orchestrator access to all specialist reviewers"
+                f"{orchestrator.path}: review-only policy requires orchestrator access to all review subagents"
             )
+
+
+def _validate_leaf_reviewers(definitions: list[CustomAgentDefinition]) -> None:
+    by_file = {definition.path.name: definition for definition in definitions}
 
     for file_name, expected_name in SPECIALIST_REVIEWERS.items():
         definition = by_file.get(file_name)
@@ -138,6 +157,27 @@ def validate_review_agent_policy(
         if definition.tools and "agent" in definition.tools:
             raise CustomAgentValidationError(
                 f"{definition.path}: specialist reviewers must not enable the agent tool"
+            )
+
+    for file_name, expected_name in FINAL_REVIEWER.items():
+        definition = by_file.get(file_name)
+        if definition is None:
+            continue
+        if definition.name != expected_name:
+            raise CustomAgentValidationError(
+                f"{definition.path}: review-only policy expects agent name {expected_name!r}"
+            )
+        if definition.metadata.get("user-invocable") is not False:
+            raise CustomAgentValidationError(
+                f"{definition.path}: review-only policy requires user-invocable: false"
+            )
+        if definition.agents is not None:
+            raise CustomAgentValidationError(
+                f"{definition.path}: Final Reviewer must be a leaf agent and must not configure subagents"
+            )
+        if definition.tools and "agent" in definition.tools:
+            raise CustomAgentValidationError(
+                f"{definition.path}: Final Reviewer must not enable the agent tool"
             )
 
 

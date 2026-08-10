@@ -7,6 +7,7 @@ import subprocess
 import pytest
 
 from ai_review.diff_collector import collect_diff
+from ai_review.agents import AGENT_ORDER, stricter_decision
 from ai_review.quality import QualityCheckResult
 from ai_review.repository import resolve_repository
 from ai_review.review_engine import (
@@ -24,10 +25,12 @@ from ai_review.review_engine import (
 class FakeClient(CopilotClient):
     def __init__(self, decisions: list[str] | None = None) -> None:
         self.calls: list[str] = []
+        self.payloads: list[dict] = []
         self.decisions = decisions or []
 
     def run_prompt(self, prompt: str, *, timeout_seconds: int) -> str:
         payload = json.loads(prompt.split("PAYLOAD_JSON\n", 1)[1].splitlines()[0])
+        self.payloads.append(payload)
         self.calls.append(payload["agent"])
         decision = self.decisions.pop(0) if self.decisions else "APPROVE"
         return json.dumps(
@@ -95,10 +98,72 @@ def test_runs_nine_agents_serially(tmp_path: Path) -> None:
 
 def test_single_agent_run_skips_others(tmp_path: Path) -> None:
     repo = init_repo(tmp_path / "repo")
-    result = run_review_engine(request_for(repo, agent="security"), FakeClient())
+    client = FakeClient()
+    result = run_review_engine(request_for(repo, agent="security"), client)
 
     assert result.agent_states["security"] == "completed"
+    assert result.agent_states["final"] == "completed"
     assert result.agent_states["requirements"] == "skipped"
+    assert client.calls == ["security", "final"]
+
+
+def test_single_specialist_run_still_sends_result_to_final(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path / "repo")
+    client = FakeClient()
+
+    run_review_engine(request_for(repo, agent="security"), client)
+
+    final_payload = client.payloads[-1]
+    assert final_payload["agent"] == "final"
+    assert [item["agent"] for item in final_payload["specialist_results"]] == ["security"]
+    assert final_payload["reviewer_states"] == {"security": "completed"}
+
+
+def test_final_agent_receives_all_specialist_results(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path / "repo")
+    client = FakeClient()
+
+    run_review_engine(request_for(repo), client)
+
+    final_payload = client.payloads[-1]
+    assert final_payload["agent"] == "final"
+    assert "specialist_results" in final_payload
+    assert [item["agent"] for item in final_payload["specialist_results"]] == AGENT_ORDER[:-1]
+    assert set(final_payload["reviewer_states"]) == set(AGENT_ORDER[:-1])
+    assert final_payload["truncation_status"] == "complete"
+    assert final_payload["quality_check_status"] == [{"name": "quality", "status": "skipped", "returncode": None}]
+    assert "previous_results" not in final_payload
+    assert "diff" not in final_payload
+
+
+def test_non_final_agents_keep_limited_previous_results(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path / "repo")
+    client = FakeClient()
+
+    run_review_engine(request_for(repo), client)
+
+    final_payload = client.payloads[-1]
+    devil_payload = client.payloads[-2]
+    assert [item["agent"] for item in devil_payload["previous_results"]] == ["performance", "operations"]
+    assert "specialist_results" not in devil_payload
+    assert len(final_payload["specialist_results"]) == 8
+
+
+def test_python_final_prompt_documents_integration_contract() -> None:
+    text = Path("agents/final.md").read_text(encoding="utf-8")
+
+    for term in [
+        "specialist_results",
+        "reviewer_states",
+        "reported_by",
+        "reported_severities",
+        "severity_conflict",
+        "conflicts",
+        "incomplete_review",
+        "Critical > Major > Minor > Info",
+    ]:
+        assert term in text
+    assert "not only the last two reviewers" in text
 
 
 def test_invalid_json_is_rejected() -> None:
@@ -109,6 +174,51 @@ def test_invalid_json_is_rejected() -> None:
 def test_schema_mismatch_is_rejected() -> None:
     with pytest.raises(AgentSchemaError):
         parse_agent_response("{}", run_id="r", agent="security")
+
+
+def test_parse_agent_response_accepts_final_reviewer_finding_metadata() -> None:
+    raw = json.dumps(
+        {
+            "run_id": "r",
+            "agent": "final",
+            "provider": "github-copilot-cli",
+            "schema_version": "0.1.0",
+            "decision": "CHANGES_REQUIRED",
+            "findings": [
+                {
+                    "severity": "Major",
+                    "category": "security",
+                    "file": "foo.py",
+                    "line/range": "10-12",
+                    "message": "unsafe subprocess",
+                    "rationale": "Security Reviewer reported command injection risk.",
+                    "recommendation": "Avoid shell execution.",
+                    "confidence": "high",
+                    "reported_by": ["Security Reviewer", "Correctness Reviewer"],
+                    "reported_severities": ["Major", "Major"],
+                    "severity_conflict": False,
+                    "extra_future_field": "ignored",
+                }
+            ],
+            "summary": "deduplicated",
+            "status": "inconclusive",
+            "reviewer_states": {"security": "failed"},
+            "conflicts": [{"reviewers": ["Requirements Reviewer", "Correctness Reviewer"]}],
+            "incomplete_review": True,
+        }
+    )
+
+    result = parse_agent_response(raw, run_id="r", agent="final")
+
+    finding = result.findings[0]
+    assert finding.line_range == "10-12"
+    assert finding.reported_by == ["Security Reviewer", "Correctness Reviewer"]
+    assert finding.reported_severities == ["Major", "Major"]
+    assert finding.severity_conflict is False
+    assert result.status == "inconclusive"
+    assert result.reviewer_states == {"security": "failed"}
+    assert result.conflicts == [{"reviewers": ["Requirements Reviewer", "Correctness Reviewer"]}]
+    assert result.incomplete_review is True
 
 
 def test_run_id_mismatch_is_rejected() -> None:
@@ -151,6 +261,24 @@ def test_major_finding_forces_changes_required(tmp_path: Path) -> None:
     assert result.final_decision == "CHANGES_REQUIRED"
 
 
+def test_failed_quality_check_forces_inconclusive_even_when_ai_approves(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path / "repo")
+    request = request_for(repo)
+    request = EngineRequest(
+        repository=request.repository,
+        diff=request.diff,
+        quality_checks=[
+            QualityCheckResult(name="pytest", command=["python", "-m", "pytest"], status="failed", returncode=1)
+        ],
+        target=request.target,
+        run_id=request.run_id,
+    )
+
+    result = run_review_engine(request, FakeClient())
+
+    assert result.final_decision == "INCONCLUSIVE"
+
+
 def test_schema_mismatch_retries_safely(tmp_path: Path) -> None:
     repo = init_repo(tmp_path / "repo")
 
@@ -165,7 +293,7 @@ def test_schema_mismatch_retries_safely(tmp_path: Path) -> None:
     result = run_review_engine(request_for(repo, agent="security"), client)
 
     assert result.agent_states["security"] == "completed"
-    assert client.calls == ["bad", "security"]
+    assert client.calls == ["bad", "security", "final"]
 
 
 def test_timeout_marks_agent_failed(tmp_path: Path) -> None:
@@ -210,3 +338,16 @@ def test_rate_limit_or_auth_failure_marks_failed(tmp_path: Path) -> None:
 
     assert result.agent_states["security"] == "failed"
     assert result.final_decision == "INCONCLUSIVE"
+
+
+@pytest.mark.parametrize(
+    ("ai_decision", "rule_decision", "expected"),
+    [
+        ("APPROVE", "CHANGES_REQUIRED", "CHANGES_REQUIRED"),
+        ("APPROVE_WITH_NOTES", "BLOCKED", "BLOCKED"),
+        ("CHANGES_REQUIRED", "APPROVE", "CHANGES_REQUIRED"),
+        ("APPROVE", "INCONCLUSIVE", "INCONCLUSIVE"),
+    ],
+)
+def test_stricter_decision_keeps_safer_outcome(ai_decision: str, rule_decision: str, expected: str) -> None:
+    assert stricter_decision(rule_decision, ai_decision) == expected
