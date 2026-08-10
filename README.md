@@ -187,3 +187,26 @@ python -m json.tool .vscode/extensions.json
 ```
 
 詳しい設計は`docs/architecture.md`、運用手順は`docs/operations.md`、復旧方法は`docs/troubleshooting.md`を参照してください。
+
+## Copilot Chat recommended review
+
+The recommended interactive review path is VS Code GitHub Copilot Chat with the `Review Orchestrator` custom agent.
+
+1. Open the target repository in VS Code.
+2. Open GitHub Copilot Chat.
+3. Select `Review Orchestrator` from the agent picker.
+4. Send a review request such as:
+
+```text
+Review the diff against main in this repository.
+```
+
+or:
+
+```text
+Review the changes corresponding to PR #123.
+```
+
+`Review Orchestrator` is the normal user-facing entry point. It delegates to the named specialist reviewers with Copilot's standard subagent tool calls, then invokes `Final Reviewer` as a subagent for synthesis. Use the expandable subagent tool calls in Copilot Chat to inspect the reviewer name, prompt/context, visible tool usage, and returned result. Exact icons and labels can vary by VS Code and Copilot version.
+
+Specialist reviewers use `user-invocable: false` so they do not fill the normal agent picker, while remaining available to `Review Orchestrator` as subagents. See `docs/copilot-chat-review-ux.md` for the documented UI assumptions, Windows manual E2E steps, and the `run_id` relationship between Chat-only and Python Controller execution.
