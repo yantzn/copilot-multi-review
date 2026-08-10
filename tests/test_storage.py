@@ -59,6 +59,15 @@ def test_save_review_result_uses_engine_reports_not_target_repo(tmp_path: Path) 
 
     assert (paths.output_root / repository.project_id / "latest" / "run.json").exists()
     assert (paths.output_root / repository.project_id / "history" / "run-1" / "run.json").exists()
+    run_json = json.loads((paths.output_root / repository.project_id / "latest" / "run.json").read_text(encoding="utf-8"))
+    final_json = json.loads(
+        (paths.output_root / repository.project_id / "latest" / "final.json").read_text(encoding="utf-8")
+    )
+    assert run_json["execution_mode"] == "subagent"
+    assert run_json["execution_strategy"] == "native"
+    assert final_json["execution_mode"] == "subagent"
+    assert final_json["execution_strategy"] == "native"
+    assert "- execution_mode: subagent" in latest_report(paths, repository.project_id)
     assert not (target / "reports").exists()
     assert not (target / "runtime").exists()
 
@@ -124,6 +133,21 @@ def test_lock_rejects_double_start_and_releases_own_generation(tmp_path: Path) -
 
     assert not lock.path.exists()
     assert not (lock.path.parent / "running.json").exists()
+
+
+def test_lock_releases_on_exception(tmp_path: Path) -> None:
+    target = init_repo(tmp_path / "target")
+    paths = RootPaths.from_engine_root(tmp_path / "engine")
+    repository = resolve_repository(str(target))
+
+    with pytest.raises(RuntimeError):
+        with acquire_review_lock(paths, repository, "run-1") as lock:
+            assert lock.path.exists()
+            raise RuntimeError("boom")
+
+    runtime_dir = paths.runtime_root / repository.project_id
+    assert not (runtime_dir / "review.lock").exists()
+    assert not (runtime_dir / "running.json").exists()
 
 
 def test_cancel_only_current_run_id(tmp_path: Path) -> None:

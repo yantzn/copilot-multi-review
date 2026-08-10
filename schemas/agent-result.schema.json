@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "AgentResult",
   "type": "object",
+  "additionalProperties": false,
   "required": ["run_id", "agent", "provider", "schema_version", "decision", "findings", "summary"],
   "properties": {
     "run_id": { "type": "string" },

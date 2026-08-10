@@ -66,16 +66,22 @@ def build_parser() -> argparse.ArgumentParser:
     ], help="単独実行するエージェント")
     review.add_argument("--no-agents", action="store_true", help="Copilotエージェントを起動せず収集結果だけ表示します")
     review.add_argument(
+        "--execution-mode",
+        choices=["subagent", "legacy"],
+        default="subagent",
+        help="Review execution mode. Default is subagent; legacy is deprecated Python serial agent execution.",
+    )
+    review.add_argument(
         "--orchestration-strategy",
         choices=["sequential", "limited_parallel", "native"],
-        default="sequential",
-        help="Evaluation strategy metadata / Python helper execution strategy",
+        default="native",
+        help="Evaluation strategy. Native is the standard subagent path; sequential/limited_parallel apply to legacy helper execution.",
     )
     review.add_argument(
         "--max-parallel-reviewers",
         type=int,
         default=2,
-        help="Maximum specialist reviewers for limited_parallel helper execution",
+        help="Maximum specialist reviewers for legacy limited_parallel helper execution.",
     )
     review.add_argument(
         "--target",
@@ -158,10 +164,17 @@ def handle_review(args: argparse.Namespace) -> int:
                 agent_results=[],
                 final_decision="INCONCLUSIVE",
                 max_concurrent_copilot_processes=0,
-                execution_strategy="sequential" if args.orchestration_strategy == "native" else args.orchestration_strategy,
+                execution_mode=args.execution_mode,
+                execution_strategy="native" if args.execution_mode == "subagent" else (
+                    "sequential" if args.orchestration_strategy == "native" else args.orchestration_strategy
+                ),
                 requested_execution_strategy=args.orchestration_strategy,
             )
         else:
+            if args.agent and args.execution_mode == "subagent":
+                print("--agent is legacy-only and is ignored by the standard subagent execution mode.", file=sys.stderr)
+            if args.execution_mode == "legacy":
+                print("legacy execution mode is deprecated and kept only for migration compatibility.", file=sys.stderr)
             engine_result = run_review_engine(
                 EngineRequest(
                     repository=repository,
@@ -171,6 +184,7 @@ def handle_review(args: argparse.Namespace) -> int:
                     run_id=run_id,
                     agent=args.agent,
                     cancel_file=paths.runtime_root / repository.project_id / "cancel.json",
+                    execution_mode=args.execution_mode,
                     orchestration_strategy=args.orchestration_strategy,
                     max_parallel_reviewers=args.max_parallel_reviewers,
                 )
@@ -186,6 +200,7 @@ def handle_review(args: argparse.Namespace) -> int:
                 "target": args.target,
                 "agent": args.agent,
                 "no_agents": args.no_agents,
+                "execution_mode": engine_result.execution_mode,
                 "orchestration_strategy": args.orchestration_strategy,
                 "max_parallel_reviewers": args.max_parallel_reviewers,
             },
@@ -225,7 +240,8 @@ def handle_rerun(args: argparse.Namespace) -> int:
         quality_command=None,
         agent=latest.get("request", {}).get("agent"),
         no_agents=args.no_agents,
-        orchestration_strategy=latest.get("request", {}).get("orchestration_strategy", "sequential"),
+        execution_mode=latest.get("request", {}).get("execution_mode", "subagent"),
+        orchestration_strategy=latest.get("request", {}).get("orchestration_strategy", "native"),
         max_parallel_reviewers=latest.get("request", {}).get("max_parallel_reviewers", 2),
     )
     return handle_review(review_args)

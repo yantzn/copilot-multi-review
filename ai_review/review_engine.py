@@ -25,6 +25,24 @@ from .repository import RepositoryContext
 from .secrets import scan_diff_for_secrets
 
 
+SPECIALIST_AGENTS = [agent for agent in AGENT_ORDER if agent != "final"]
+VALID_EXECUTION_MODES = {"subagent", "legacy"}
+VALID_REVIEWER_STATES = {
+    "pending",
+    "running",
+    "delegated",
+    "completed",
+    "failed",
+    "missing",
+    "skipped",
+    "not_run",
+    "blocked",
+    "inconclusive",
+    "cancelled",
+}
+INCOMPLETE_REVIEWER_STATES = VALID_REVIEWER_STATES - {"completed"}
+
+
 class ReviewEngineError(RuntimeError):
     pass
 
@@ -51,7 +69,8 @@ class EngineRequest:
     agent: str | None = None
     timeout_seconds: int = 120
     cancel_file: Path | None = None
-    orchestration_strategy: ExecutionStrategy = "sequential"
+    execution_mode: str = "subagent"
+    orchestration_strategy: ExecutionStrategy = "native"
     max_parallel_reviewers: int = DEFAULT_MAX_PARALLEL_REVIEWERS
 
 
@@ -63,7 +82,8 @@ class EngineResult:
     agent_results: list[AgentResult]
     final_decision: str
     max_concurrent_copilot_processes: int
-    execution_strategy: str = "sequential"
+    execution_mode: str = "subagent"
+    execution_strategy: str = "native"
     requested_execution_strategy: str | None = None
     started_at: str | None = None
     finished_at: str | None = None
@@ -99,32 +119,119 @@ class CopilotClient:
 
 
 def run_review_engine(request: EngineRequest, client: CopilotClient | None = None) -> EngineResult:
-    client = client or CopilotClient()
-    strategy = validate_execution_strategy(request.orchestration_strategy)
-    actual_strategy = _actual_controller_strategy(strategy)
-    max_parallel_reviewers = validate_max_parallel_reviewers(request.max_parallel_reviewers)
+    """Run the standard Python Review Controller path.
+
+    Python prepares safe review context, invokes the Copilot Review Orchestrator
+    once, validates the untrusted Final Reviewer result, reconciles it with
+    deterministic rules, and returns data ready for persistence.
+    """
+
     started_at = _now_iso()
     started_monotonic = time.monotonic()
+    if request.execution_mode == "legacy":
+        return run_legacy_review_engine(request, client, started_at=started_at, started_monotonic=started_monotonic)
+    if request.execution_mode not in VALID_EXECUTION_MODES:
+        raise ReviewEngineError(f"unknown execution mode: {request.execution_mode}")
+    if request.agent and request.agent not in AGENT_ORDER:
+        raise ReviewEngineError(f"unknown agent: {request.agent}")
 
-    secret_scan = scan_diff_for_secrets(request.diff)
-    if secret_scan.blocked:
-        return EngineResult(
-            run_id=request.run_id,
-            provider=client.provider,
-            agent_states={agent: "skipped" for agent in AGENT_ORDER},
-            agent_results=[],
-            final_decision="BLOCKED",
-            max_concurrent_copilot_processes=0,
-            execution_strategy=actual_strategy,
-            requested_execution_strategy=strategy,
+    client = client or CopilotClient()
+    blocked = _preflight_blocked_result(request, provider=client.provider, execution_mode="subagent")
+    if blocked:
+        return _with_timing(
+            blocked,
             started_at=started_at,
-            finished_at=_now_iso(),
-            duration_ms=_elapsed_ms(started_monotonic),
+            started_monotonic=started_monotonic,
             agent_durations_ms={},
             orchestrator_duration_ms=0,
             final_reviewer_duration_ms=None,
+            execution_strategy="native",
+            requested_execution_strategy="native",
         )
+    if _is_cancelled(request.cancel_file):
+        raise AgentCancelledError(f"review was cancelled before Copilot invocation: {request.run_id}")
 
+    states = {agent: "delegated" for agent in SPECIALIST_AGENTS}
+    states["final"] = "pending"
+    results: list[AgentResult] = []
+    failed = False
+    max_concurrent = 0
+    orchestrator_started = time.monotonic()
+
+    try:
+        states["final"] = "running"
+        max_concurrent = 1
+        raw = client.run_prompt(_build_orchestrator_prompt(request), timeout_seconds=request.timeout_seconds)
+        final_result = parse_subagent_final_response(raw, run_id=request.run_id)
+        results.append(final_result)
+        states["final"] = final_result.status
+        states.update(_normalize_reviewer_states(final_result.reviewer_states))
+        failed = final_result.status in {"failed", "blocked", "inconclusive"} or _has_incomplete_reviewer_state(states)
+    except subprocess.TimeoutExpired:
+        states["final"] = "failed"
+        failed = True
+        results.append(_failed_result(request.run_id, "final", "timeout"))
+    except (AgentSchemaError, AgentRunIdMismatchError, ReviewEngineError):
+        states["final"] = "failed"
+        failed = True
+        results.append(_failed_result(request.run_id, "final", "failed"))
+
+    return _reconcile_result(
+        request,
+        provider=client.provider,
+        states=states,
+        results=results,
+        failed=failed,
+        max_concurrent=max_concurrent,
+        execution_mode="subagent",
+        execution_strategy="native",
+        requested_execution_strategy="native",
+        started_at=started_at,
+        started_monotonic=started_monotonic,
+        agent_durations_ms={"final": _elapsed_ms(orchestrator_started)},
+        orchestrator_duration_ms=_elapsed_ms(orchestrator_started),
+        final_reviewer_duration_ms=_elapsed_ms(orchestrator_started),
+    )
+
+
+def run_legacy_review_engine(
+    request: EngineRequest,
+    client: CopilotClient | None = None,
+    *,
+    started_at: str | None = None,
+    started_monotonic: float | None = None,
+) -> EngineResult:
+    """Deprecated Python-driven serial reviewer runner.
+
+    This path exists only for migration compatibility. New code must use the
+    default `subagent` execution mode, where Python prepares, validates,
+    decides, and persists while Copilot Custom Agents review and synthesize.
+
+    Removal condition: delete this path after downstream CLI users no longer
+    require Python to invoke the old logical prompts under `agents/*.md`.
+    Removed responsibilities will be the 8 specialist reviewer invocations,
+    AI specialist judgment generation, Python-side reviewer result handoff, and
+    Python-side Final Reviewer invocation.
+    """
+
+    client = client or CopilotClient()
+    strategy = validate_execution_strategy(request.orchestration_strategy)
+    actual_strategy = _actual_legacy_strategy(strategy)
+    max_parallel_reviewers = validate_max_parallel_reviewers(request.max_parallel_reviewers)
+    started_at = started_at or _now_iso()
+    started_monotonic = started_monotonic or time.monotonic()
+    blocked = _preflight_blocked_result(request, provider=client.provider, execution_mode="legacy")
+    if blocked:
+        return _with_timing(
+            blocked,
+            started_at=started_at,
+            started_monotonic=started_monotonic,
+            agent_durations_ms={},
+            orchestrator_duration_ms=0,
+            final_reviewer_duration_ms=None,
+            execution_strategy=actual_strategy,
+            requested_execution_strategy=strategy,
+        )
     selected_agents = _select_agents(request.agent)
     if request.agent and request.agent not in AGENT_ORDER:
         raise ReviewEngineError(f"unknown agent: {request.agent}")
@@ -133,7 +240,6 @@ def run_review_engine(request: EngineRequest, client: CopilotClient | None = Non
     results: list[AgentResult] = []
     durations: dict[str, int] = {}
     specialists = [agent for agent in selected_agents if agent != "final"]
-
     orchestrator_started = time.monotonic()
     if actual_strategy == "limited_parallel" and len(specialists) > 1:
         max_concurrent = min(max_parallel_reviewers, len(specialists))
@@ -182,6 +288,41 @@ def run_review_engine(request: EngineRequest, client: CopilotClient | None = Non
         if agent not in selected_agents and states[agent] == "pending":
             states[agent] = "skipped"
 
+    return _reconcile_result(
+        request,
+        provider=client.provider,
+        states=states,
+        results=results,
+        failed=failed,
+        max_concurrent=max_concurrent,
+        execution_mode="legacy",
+        execution_strategy=actual_strategy,
+        requested_execution_strategy=strategy,
+        started_at=started_at,
+        started_monotonic=started_monotonic,
+        agent_durations_ms=durations,
+        orchestrator_duration_ms=orchestrator_duration_ms,
+        final_reviewer_duration_ms=durations.get("final"),
+    )
+
+
+def _reconcile_result(
+    request: EngineRequest,
+    *,
+    provider: str,
+    states: dict[str, str],
+    results: list[AgentResult],
+    failed: bool,
+    max_concurrent: int,
+    execution_mode: str,
+    execution_strategy: str,
+    requested_execution_strategy: str,
+    started_at: str,
+    started_monotonic: float,
+    agent_durations_ms: dict[str, int],
+    orchestrator_duration_ms: int | None,
+    final_reviewer_duration_ms: int | None,
+) -> EngineResult:
     ai_decision = results[-1].decision if results else "INCONCLUSIVE"
     rules = rule_based_decision(
         results,
@@ -190,19 +331,35 @@ def run_review_engine(request: EngineRequest, client: CopilotClient | None = Non
     )
     return EngineResult(
         run_id=request.run_id,
-        provider=client.provider,
+        provider=provider,
         agent_states=states,
         agent_results=results,
         final_decision=stricter_decision(rules, ai_decision),
         max_concurrent_copilot_processes=max_concurrent,
-        execution_strategy=actual_strategy,
-        requested_execution_strategy=strategy,
+        execution_mode=execution_mode,
+        execution_strategy=execution_strategy,
+        requested_execution_strategy=requested_execution_strategy,
         started_at=started_at,
         finished_at=_now_iso(),
         duration_ms=_elapsed_ms(started_monotonic),
-        agent_durations_ms=durations,
+        agent_durations_ms=agent_durations_ms,
         orchestrator_duration_ms=orchestrator_duration_ms,
-        final_reviewer_duration_ms=durations.get("final"),
+        final_reviewer_duration_ms=final_reviewer_duration_ms,
+    )
+
+
+def _preflight_blocked_result(request: EngineRequest, *, provider: str, execution_mode: str) -> EngineResult | None:
+    secret_scan = scan_diff_for_secrets(request.diff)
+    if not secret_scan.blocked:
+        return None
+    return EngineResult(
+        run_id=request.run_id,
+        provider=provider,
+        agent_states={agent: "skipped" for agent in AGENT_ORDER},
+        agent_results=[],
+        final_decision="BLOCKED",
+        max_concurrent_copilot_processes=0,
+        execution_mode=execution_mode,
     )
 
 
@@ -255,7 +412,7 @@ def _run_specialists_limited_parallel(
             _submit_next_specialist(request, client, states, pending_agents, futures, executor)
         while futures:
             if _is_cancelled(request.cancel_file):
-                _cancel_parallel_work(request, states, pending_agents, futures, executor)
+                _cancel_parallel_work(request, states, pending_agents, futures)
             done, _ = wait(futures, timeout=0.05, return_when=FIRST_COMPLETED)
             if not done:
                 continue
@@ -272,7 +429,7 @@ def _run_specialists_limited_parallel(
                 failed = failed or result.status == "failed"
             while pending_agents and len(futures) < max_workers:
                 if _is_cancelled(request.cancel_file):
-                    _cancel_parallel_work(request, states, pending_agents, futures, executor)
+                    _cancel_parallel_work(request, states, pending_agents, futures)
                 _submit_next_specialist(request, client, states, pending_agents, futures, executor)
     except AgentCancelledError:
         executor.shutdown(wait=False, cancel_futures=True)
@@ -304,7 +461,6 @@ def _cancel_parallel_work(
     states: dict[str, str],
     pending_agents: deque[str],
     futures: dict[Future[tuple[AgentResult, int]], str],
-    executor: ThreadPoolExecutor,
 ) -> None:
     for agent in pending_agents:
         states[agent] = "cancelled"
@@ -338,7 +494,7 @@ def _select_agents(requested_agent: str | None) -> list[str]:
     return [requested_agent, "final"]
 
 
-def _actual_controller_strategy(strategy: str) -> str:
+def _actual_legacy_strategy(strategy: str) -> str:
     if strategy == "native":
         return "sequential"
     return strategy
@@ -352,11 +508,11 @@ def parse_agent_response(raw: str, *, run_id: str, agent: str) -> AgentResult:
     payload = _extract_json(raw)
     _validate_payload(payload)
     if payload["run_id"] != run_id:
-        raise AgentRunIdMismatchError("run_id mismatch")
+        raise AgentRunIdMismatchError("run_id does not match")
     if payload["agent"] != agent:
-        raise AgentSchemaError("agent mismatch")
+        raise AgentSchemaError("agent does not match")
     if payload["provider"] != "github-copilot-cli":
-        raise AgentSchemaError("provider mismatch")
+        raise AgentSchemaError("provider does not match")
     findings = [_parse_finding(item) for item in payload.get("findings", [])]
     return AgentResult(
         run_id=payload["run_id"],
@@ -373,6 +529,12 @@ def parse_agent_response(raw: str, *, run_id: str, agent: str) -> AgentResult:
     )
 
 
+def parse_subagent_final_response(raw: str, *, run_id: str) -> AgentResult:
+    result = parse_agent_response(raw, run_id=run_id, agent="final")
+    _validate_subagent_reviewer_states(result.reviewer_states)
+    return result
+
+
 def _run_agent_with_retry(client: CopilotClient, prompt: str, request: EngineRequest, agent: str) -> AgentResult:
     last_error: AgentSchemaError | AgentRunIdMismatchError | None = None
     for attempt in range(2):
@@ -383,7 +545,7 @@ def _run_agent_with_retry(client: CopilotClient, prompt: str, request: EngineReq
             raise
         except AgentSchemaError as exc:
             last_error = exc
-            prompt += "\n\nPrevious response did not match the schema. Return only a JSON object."
+            prompt += "\n\nPrevious response did not match the AgentResult schema. Return only one JSON object."
             if attempt == 1:
                 raise
     raise last_error or AgentSchemaError("schema validation failed")
@@ -394,6 +556,8 @@ def new_run_id() -> str:
 
 
 def _extract_json(raw: str) -> dict:
+    if not raw.strip():
+        raise AgentSchemaError("Copilot output was empty")
     start = raw.find("{")
     end = raw.rfind("}")
     if start == -1 or end == -1 or end < start:
@@ -408,22 +572,42 @@ def _extract_json(raw: str) -> dict:
 
 
 def _validate_payload(payload: dict) -> None:
+    allowed_top_level = {
+        "run_id",
+        "agent",
+        "provider",
+        "schema_version",
+        "status",
+        "decision",
+        "findings",
+        "summary",
+        "reviewer_states",
+        "conflicts",
+        "incomplete_review",
+    }
+    unknown = set(payload) - allowed_top_level
+    if unknown:
+        raise AgentSchemaError(f"unknown top-level fields: {', '.join(sorted(unknown))}")
     required = {"run_id", "agent", "provider", "schema_version", "decision", "findings", "summary"}
     missing = required - payload.keys()
     if missing:
-        raise AgentSchemaError(f"required keys are missing: {', '.join(sorted(missing))}")
+        raise AgentSchemaError(f"missing required fields: {', '.join(sorted(missing))}")
     if payload["decision"] not in {"APPROVE", "APPROVE_WITH_NOTES", "CHANGES_REQUIRED", "BLOCKED", "INCONCLUSIVE"}:
         raise AgentSchemaError("decision is invalid")
     if not isinstance(payload["findings"], list):
         raise AgentSchemaError("findings must be an array")
     if "status" in payload and payload["status"] not in {"completed", "inconclusive", "blocked", "failed"}:
         raise AgentSchemaError("status is invalid")
-    if "reviewer_states" in payload and not isinstance(payload["reviewer_states"], dict):
-        raise AgentSchemaError("reviewer_states must be an object")
-    if "conflicts" in payload and not isinstance(payload["conflicts"], list):
-        raise AgentSchemaError("conflicts must be an array")
-    if "incomplete_review" in payload and not isinstance(payload["incomplete_review"], bool):
-        raise AgentSchemaError("incomplete_review must be a boolean")
+    if "reviewer_states" in payload and payload["reviewer_states"] is not None and not isinstance(
+        payload["reviewer_states"], dict
+    ):
+        raise AgentSchemaError("reviewer_states must be an object or null")
+    if "conflicts" in payload and payload["conflicts"] is not None and not isinstance(payload["conflicts"], list):
+        raise AgentSchemaError("conflicts must be an array or null")
+    if "incomplete_review" in payload and payload["incomplete_review"] is not None and not isinstance(
+        payload["incomplete_review"], bool
+    ):
+        raise AgentSchemaError("incomplete_review must be a boolean or null")
     for finding in payload["findings"]:
         if not isinstance(finding, dict):
             raise AgentSchemaError("finding must be an object")
@@ -447,7 +631,7 @@ def _build_prompt(request: EngineRequest, agent: str, previous: list[AgentResult
     payload = _build_final_prompt_payload(request, previous) if agent == "final" else _build_agent_prompt_payload(
         request, agent
     )
-    return prompt + "\n\nReturn JSON only.\nPAYLOAD_JSON\n" + json.dumps(payload, ensure_ascii=False)
+    return prompt + "\n\nReturn only one JSON object.\nPAYLOAD_JSON\n" + json.dumps(payload, ensure_ascii=False)
 
 
 def _build_agent_prompt_payload(request: EngineRequest, agent: str) -> dict[str, object]:
@@ -460,6 +644,57 @@ def _build_agent_prompt_payload(request: EngineRequest, agent: str) -> dict[str,
         "diff_line_count": request.diff.diff_line_count,
         "truncated": request.diff.truncated,
         "quality_checks": [asdict(item) for item in request.quality_checks],
+        "diff": request.diff.diff_text,
+    }
+
+
+def _build_orchestrator_prompt(request: EngineRequest) -> str:
+    prompt_path = Path(__file__).resolve().parent.parent / ".github" / "agents" / "review-orchestrator.agent.md"
+    prompt = prompt_path.read_text(encoding="utf-8")
+    payload = _build_orchestrator_payload(request)
+    return prompt + "\n\nReturn only the Final Reviewer AgentResult JSON object.\nPAYLOAD_JSON\n" + json.dumps(
+        payload, ensure_ascii=False
+    )
+
+
+def _build_orchestrator_payload(request: EngineRequest) -> dict[str, object]:
+    return {
+        "run_id": request.run_id,
+        "execution_mode": "subagent",
+        "review_target": request.target,
+        "requested_legacy_agent": request.agent,
+        "repository": {
+            "project_id": request.repository.project_id,
+            "root": str(request.repository.root),
+            "remote_url": request.repository.remote_url,
+            "current_branch": request.repository.current_branch,
+            "head_sha": request.repository.head_sha,
+        },
+        "base_ref": request.repository.base_branch,
+        "head_ref": request.repository.current_branch,
+        "changed_files": {
+            "files": request.diff.changed_files,
+            "changed_file_count": request.diff.changed_file_count,
+            "diff_line_count": request.diff.diff_line_count,
+        },
+        "review_scope": "all specialist reviewers through Review Orchestrator",
+        "constraints": {
+            "python_responsibility": "Prepare, validate, decide, persist",
+            "copilot_responsibility": "Review and synthesize through custom subagents",
+            "ai_output_is_untrusted_input": True,
+            "no_previous_results_for_specialists": True,
+        },
+        "truncation_status": "truncated" if request.diff.truncated else "complete",
+        "secret_scan_status": "passed",
+        "quality_check_status": [
+            {
+                "name": check.name,
+                "status": check.status,
+                "returncode": check.returncode,
+            }
+            for check in request.quality_checks
+        ],
+        "common_output_schema": "schemas/agent-result.schema.json",
         "diff": request.diff.diff_text,
     }
 
@@ -513,10 +748,97 @@ def _failed_result(run_id: str, agent: str, reason: str) -> AgentResult:
     )
 
 
+def _with_timing(
+    result: EngineResult,
+    *,
+    started_at: str,
+    started_monotonic: float,
+    agent_durations_ms: dict[str, int],
+    orchestrator_duration_ms: int | None,
+    final_reviewer_duration_ms: int | None,
+    execution_strategy: str,
+    requested_execution_strategy: str,
+) -> EngineResult:
+    return EngineResult(
+        run_id=result.run_id,
+        provider=result.provider,
+        agent_states=result.agent_states,
+        agent_results=result.agent_results,
+        final_decision=result.final_decision,
+        max_concurrent_copilot_processes=result.max_concurrent_copilot_processes,
+        execution_mode=result.execution_mode,
+        execution_strategy=execution_strategy,
+        requested_execution_strategy=requested_execution_strategy,
+        started_at=started_at,
+        finished_at=_now_iso(),
+        duration_ms=_elapsed_ms(started_monotonic),
+        agent_durations_ms=agent_durations_ms,
+        orchestrator_duration_ms=orchestrator_duration_ms,
+        final_reviewer_duration_ms=final_reviewer_duration_ms,
+    )
+
+
 def _raise_if_cancelled(request: EngineRequest, states: dict[str, str], agent: str) -> None:
     if _is_cancelled(request.cancel_file):
         states[agent] = "cancelled"
         raise AgentCancelledError(f"review was cancelled: {request.run_id}")
+
+
+def _normalize_reviewer_states(reviewer_states: dict[str, str] | None) -> dict[str, str]:
+    if not reviewer_states:
+        return {}
+    normalized: dict[str, str] = {}
+    for agent, state in reviewer_states.items():
+        key = _canonical_agent_key(agent)
+        if key in AGENT_ORDER and isinstance(state, str):
+            normalized[key] = state
+    return normalized
+
+
+def _validate_subagent_reviewer_states(reviewer_states: dict[str, str] | None) -> None:
+    if not reviewer_states:
+        raise AgentSchemaError("subagent final result must include reviewer_states")
+
+    normalized: dict[str, str] = {}
+    unknown_reviewers: list[str] = []
+    invalid_states: list[str] = []
+    for reviewer, state in reviewer_states.items():
+        key = _canonical_agent_key(reviewer)
+        if key not in SPECIALIST_AGENTS:
+            unknown_reviewers.append(reviewer)
+            continue
+        if not isinstance(state, str) or state not in VALID_REVIEWER_STATES:
+            invalid_states.append(f"{reviewer}={state!r}")
+            continue
+        normalized[key] = state
+
+    missing = set(SPECIALIST_AGENTS) - set(normalized)
+    if unknown_reviewers:
+        raise AgentSchemaError(f"unknown reviewer_states reviewers: {', '.join(sorted(unknown_reviewers))}")
+    if invalid_states:
+        raise AgentSchemaError(f"invalid reviewer_states values: {', '.join(sorted(invalid_states))}")
+    if missing:
+        raise AgentSchemaError(f"missing reviewer_states reviewers: {', '.join(sorted(missing))}")
+
+
+def _canonical_agent_key(value: str) -> str:
+    lowered = value.strip().lower().replace("-", "_").replace(" ", "_")
+    mapping = {
+        "requirements_reviewer": "requirements",
+        "correctness_reviewer": "correctness",
+        "security_reviewer": "security",
+        "testing_reviewer": "testing",
+        "maintainability_reviewer": "maintainability",
+        "performance_reviewer": "performance",
+        "operations_reviewer": "operations",
+        "devil_advocate": "devil_advocate",
+        "final_reviewer": "final",
+    }
+    return mapping.get(lowered, lowered)
+
+
+def _has_incomplete_reviewer_state(states: dict[str, str]) -> bool:
+    return any(state in INCOMPLETE_REVIEWER_STATES for agent, state in states.items() if agent != "final")
 
 
 def _is_cancelled(cancel_file: Path | None) -> bool:

@@ -112,13 +112,13 @@ The selected standard execution strategy is `native`. This uses the standard Git
 Python CLI helper paths:
 
 ```bash
-ai-review review --repo <path> --target base --orchestration-strategy sequential
-ai-review review --repo <path> --target base --orchestration-strategy limited_parallel --max-parallel-reviewers 2
+ai-review review --repo <path> --target base --execution-mode legacy --orchestration-strategy sequential
+ai-review review --repo <path> --target base --execution-mode legacy --orchestration-strategy limited_parallel --max-parallel-reviewers 2
 ```
 
 Use these helper strategies for controlled comparison and deterministic report persistence. Do not promote the legacy Python nine-call sequential runner back to the standard path.
 
-If `--orchestration-strategy native` is passed to the Python helper, the report records `requested_execution_strategy: native` and `execution_strategy: sequential`. Native delegation itself is available only through the standard Copilot Chat/Subagent path.
+The default Python controller path is `--execution-mode subagent`, which records `execution_strategy: native`. If `--orchestration-strategy native` is passed with `--execution-mode legacy`, the report records `requested_execution_strategy: native` and `execution_strategy: sequential` because legacy cannot execute native Chat delegation.
 
 Evaluation artifacts:
 
