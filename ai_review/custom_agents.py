@@ -111,7 +111,7 @@ def _split_frontmatter(text: str, path: Path) -> tuple[dict[str, object], str]:
 
 def _normalize_tools(value: object, path: Path) -> list[str]:
     if value is None:
-        return []
+        raise CustomAgentValidationError(f"{path}: review agents must explicitly declare tools")
     if isinstance(value, str):
         if not value.strip():
             raise CustomAgentValidationError(f"{path}: tools must not contain empty strings")

@@ -67,7 +67,7 @@ Instructions
     assert definitions[0].tools == ["search"]
 
 
-def test_missing_tools_are_valid_and_normalized(tmp_path: Path) -> None:
+def test_missing_tools_are_rejected_for_review_only_agents(tmp_path: Path) -> None:
     write_agent(
         tmp_path,
         """---
@@ -78,9 +78,8 @@ Instructions
 """,
     )
 
-    definitions = validate_custom_agents(tmp_path)
-
-    assert definitions[0].tools == []
+    with pytest.raises(CustomAgentValidationError, match="explicitly declare tools"):
+        validate_custom_agents(tmp_path)
 
 
 def test_nested_yaml_is_valid(tmp_path: Path) -> None:
@@ -118,6 +117,7 @@ def test_unknown_frontmatter_fields_are_allowed(tmp_path: Path) -> None:
         """---
 name: Review Orchestrator
 description: Coordinate review.
+tools: search
 future-field:
   nested:
     value: true
