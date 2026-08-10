@@ -66,6 +66,18 @@ def build_parser() -> argparse.ArgumentParser:
     ], help="単独実行するエージェント")
     review.add_argument("--no-agents", action="store_true", help="Copilotエージェントを起動せず収集結果だけ表示します")
     review.add_argument(
+        "--orchestration-strategy",
+        choices=["sequential", "limited_parallel", "native"],
+        default="sequential",
+        help="Evaluation strategy metadata / Python helper execution strategy",
+    )
+    review.add_argument(
+        "--max-parallel-reviewers",
+        type=int,
+        default=2,
+        help="Maximum specialist reviewers for limited_parallel helper execution",
+    )
+    review.add_argument(
         "--target",
         required=True,
         choices=["base", "uncommitted", "staged", "commits", "file"],
@@ -146,6 +158,7 @@ def handle_review(args: argparse.Namespace) -> int:
                 agent_results=[],
                 final_decision="INCONCLUSIVE",
                 max_concurrent_copilot_processes=0,
+                execution_strategy=args.orchestration_strategy,
             )
         else:
             engine_result = run_review_engine(
@@ -157,6 +170,8 @@ def handle_review(args: argparse.Namespace) -> int:
                     run_id=run_id,
                     agent=args.agent,
                     cancel_file=paths.runtime_root / repository.project_id / "cancel.json",
+                    orchestration_strategy=args.orchestration_strategy,
+                    max_parallel_reviewers=args.max_parallel_reviewers,
                 )
             )
         print(f"Final decision: {engine_result.final_decision}")
@@ -166,7 +181,13 @@ def handle_review(args: argparse.Namespace) -> int:
             repository,
             run_id=engine_result.run_id,
             target=args.target,
-            request={"target": args.target, "agent": args.agent, "no_agents": args.no_agents},
+            request={
+                "target": args.target,
+                "agent": args.agent,
+                "no_agents": args.no_agents,
+                "orchestration_strategy": args.orchestration_strategy,
+                "max_parallel_reviewers": args.max_parallel_reviewers,
+            },
             diff=diff,
             quality_checks=quality,
             engine_result=engine_result,
@@ -203,6 +224,8 @@ def handle_rerun(args: argparse.Namespace) -> int:
         quality_command=None,
         agent=latest.get("request", {}).get("agent"),
         no_agents=args.no_agents,
+        orchestration_strategy=latest.get("request", {}).get("orchestration_strategy", "sequential"),
+        max_parallel_reviewers=latest.get("request", {}).get("max_parallel_reviewers", 2),
     )
     return handle_review(review_args)
 

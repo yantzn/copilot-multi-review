@@ -1,0 +1,121 @@
+{
+  "schema_version": "0.1.0",
+  "date": "2026-08-10",
+  "environment": {
+    "os": "Windows",
+    "timezone": "Asia/Tokyo",
+    "copilot_chat": "not available in this automated test environment",
+    "copilot_cli": "not executed against real GitHub Copilot in this environment"
+  },
+  "standard_strategy_decision": {
+    "selected": "native",
+    "reason": "The current automated environment cannot produce enough real Copilot Subagent quality, credit, UI, or internal parallelism data to justify switching the standard away from Copilot native delegation. Native delegation remains the recommended standard; Python sequential and limited_parallel are evaluation/helper strategies only.",
+    "issue_6_status": "legacy and superseded by #23-#29 for the standard path; already closed as the original MVP sequential runner"
+  },
+  "strategy_comparison": [
+    {
+      "strategy": "sequential",
+      "quality": "PARTIAL",
+      "duration": "controller timing available in tests only",
+      "credits": "Unavailable",
+      "rate_limit": {
+        "observed": false,
+        "observable": true,
+        "notes": "No real Copilot requests were sent during automated tests."
+      }
+    },
+    {
+      "strategy": "limited_parallel",
+      "quality": "PARTIAL",
+      "duration": "controller timing available in tests only",
+      "credits": "Unavailable",
+      "rate_limit": {
+        "observed": false,
+        "observable": true,
+        "notes": "No real Copilot requests were sent during automated tests."
+      }
+    },
+    {
+      "strategy": "native",
+      "quality": "BLOCKED",
+      "duration": "NOT_OBSERVABLE",
+      "credits": "Unavailable",
+      "rate_limit": {
+        "observed": false,
+        "observable": true,
+        "notes": "Native Chat/Subagent run requires VS Code or GitHub Copilot Chat manual E2E."
+      }
+    }
+  ],
+  "credits": {
+    "available": false,
+    "value": null,
+    "source": null,
+    "reason": "Current GitHub Copilot interfaces expose billing/usage reports at account or organization time-period granularity, but not per-subagent or per-reviewer credit usage for this architecture."
+  },
+  "manual_e2e": [
+    {
+      "scenario": "clean-small-diff",
+      "status": "BLOCKED",
+      "reason": "Requires authenticated Copilot Chat Subagent execution."
+    },
+    {
+      "scenario": "requirements-violation",
+      "status": "BLOCKED",
+      "reason": "Requires authenticated Copilot Chat Subagent execution."
+    },
+    {
+      "scenario": "correctness-bug",
+      "status": "BLOCKED",
+      "reason": "Requires authenticated Copilot Chat Subagent execution."
+    },
+    {
+      "scenario": "security-vulnerability",
+      "status": "BLOCKED",
+      "reason": "Requires authenticated Copilot Chat Subagent execution."
+    },
+    {
+      "scenario": "missing-tests",
+      "status": "BLOCKED",
+      "reason": "Requires authenticated Copilot Chat Subagent execution."
+    },
+    {
+      "scenario": "multi-concern",
+      "status": "BLOCKED",
+      "reason": "Requires authenticated Copilot Chat Subagent execution."
+    },
+    {
+      "scenario": "large-diff",
+      "status": "BLOCKED",
+      "reason": "Requires authenticated Copilot Chat Subagent execution."
+    },
+    {
+      "scenario": "secret-blocked-before-ai",
+      "status": "PASS",
+      "reason": "Automated pytest verifies Copilot invocation count is zero when secret scan blocks."
+    },
+    {
+      "scenario": "one-subagent-failure",
+      "status": "PASS",
+      "reason": "Automated pytest verifies failed specialist plus approving Final Reviewer still yields INCONCLUSIVE."
+    },
+    {
+      "scenario": "final-reviewer-failure",
+      "status": "PASS",
+      "reason": "Automated pytest verifies invalid Final Reviewer response cannot APPROVE."
+    },
+    {
+      "scenario": "windows-japanese-path",
+      "status": "PASS",
+      "reason": "Automated pytest initializes and reviews a repository below レビュー対象\\サンプル."
+    }
+  ],
+  "chat_ui_observability": {
+    "reviewer_name": "BLOCKED",
+    "running_completed_failed_status": "BLOCKED",
+    "prompt_context": "NOT_OBSERVABLE",
+    "tool_usage": "NOT_OBSERVABLE",
+    "returned_result": "BLOCKED",
+    "reason": "No VS Code/GitHub Copilot Chat session was available to run manual UI E2E."
+  }
+}

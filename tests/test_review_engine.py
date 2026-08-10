@@ -136,7 +136,7 @@ def test_final_agent_receives_all_specialist_results(tmp_path: Path) -> None:
     assert "diff" not in final_payload
 
 
-def test_non_final_agents_keep_limited_previous_results(tmp_path: Path) -> None:
+def test_non_final_agents_do_not_receive_previous_results(tmp_path: Path) -> None:
     repo = init_repo(tmp_path / "repo")
     client = FakeClient()
 
@@ -144,7 +144,7 @@ def test_non_final_agents_keep_limited_previous_results(tmp_path: Path) -> None:
 
     final_payload = client.payloads[-1]
     devil_payload = client.payloads[-2]
-    assert [item["agent"] for item in devil_payload["previous_results"]] == ["performance", "operations"]
+    assert "previous_results" not in devil_payload
     assert "specialist_results" not in devil_payload
     assert len(final_payload["specialist_results"]) == 8
 
@@ -307,6 +307,111 @@ def test_timeout_marks_agent_failed(tmp_path: Path) -> None:
 
     assert result.agent_states["security"] == "failed"
     assert result.final_decision == "INCONCLUSIVE"
+
+
+def test_failed_specialist_does_not_approve_even_if_final_approves(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path / "repo")
+
+    class OneFailedClient(FakeClient):
+        def run_prompt(self, prompt: str, *, timeout_seconds: int) -> str:
+            payload = json.loads(prompt.split("PAYLOAD_JSON\n", 1)[1].splitlines()[0])
+            if payload["agent"] == "security":
+                raise ReviewEngineError("subagent failed")
+            self.calls.append(payload["agent"])
+            return json.dumps(
+                {
+                    "run_id": payload["run_id"],
+                    "agent": payload["agent"],
+                    "provider": "github-copilot-cli",
+                    "schema_version": "0.1.0",
+                    "decision": "APPROVE",
+                    "findings": [],
+                    "summary": "ok",
+                }
+            )
+
+    result = run_review_engine(request_for(repo, agent="security"), OneFailedClient())
+
+    assert result.agent_states["security"] == "failed"
+    assert result.agent_states["final"] == "completed"
+    assert result.final_decision == "INCONCLUSIVE"
+
+
+def test_final_failure_does_not_approve(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path / "repo")
+
+    class FinalFailedClient(FakeClient):
+        def run_prompt(self, prompt: str, *, timeout_seconds: int) -> str:
+            payload = json.loads(prompt.split("PAYLOAD_JSON\n", 1)[1].splitlines()[0])
+            if payload["agent"] == "final":
+                return "{"
+            return super().run_prompt(prompt, timeout_seconds=timeout_seconds)
+
+    result = run_review_engine(request_for(repo, agent="security"), FinalFailedClient())
+
+    assert result.agent_states["final"] == "failed"
+    assert result.final_decision == "INCONCLUSIVE"
+
+
+def test_limited_parallel_keeps_specialists_independent(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path / "repo")
+    request = request_for(repo)
+    request = EngineRequest(
+        repository=request.repository,
+        diff=request.diff,
+        quality_checks=request.quality_checks,
+        target=request.target,
+        run_id=request.run_id,
+        orchestration_strategy="limited_parallel",
+        max_parallel_reviewers=2,
+    )
+    client = FakeClient()
+
+    result = run_review_engine(request, client)
+
+    assert result.execution_strategy == "limited_parallel"
+    assert result.max_concurrent_copilot_processes == 2
+    assert all("previous_results" not in payload for payload in client.payloads if payload["agent"] != "final")
+    assert client.payloads[-1]["agent"] == "final"
+
+
+def test_timing_fields_are_recorded(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path / "repo")
+
+    result = run_review_engine(request_for(repo, agent="security"), FakeClient())
+
+    assert result.started_at
+    assert result.finished_at
+    assert result.duration_ms is not None
+    assert result.orchestrator_duration_ms is not None
+    assert result.final_reviewer_duration_ms is not None
+    assert set(result.agent_durations_ms or {}) == {"security", "final"}
+
+
+def test_invalid_strategy_is_rejected(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path / "repo")
+    request = request_for(repo)
+    request = EngineRequest(
+        repository=request.repository,
+        diff=request.diff,
+        quality_checks=request.quality_checks,
+        target=request.target,
+        run_id=request.run_id,
+        orchestration_strategy="bad",  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(ValueError):
+        run_review_engine(request, FakeClient())
+
+
+def test_windows_japanese_path_review_report_fields(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path / "レビュー対象" / "サンプル")
+
+    result = run_review_engine(request_for(repo, agent="security"), FakeClient())
+
+    assert result.final_decision == "APPROVE"
+    assert result.agent_states["security"] == "completed"
+    assert result.agent_durations_ms
 
 
 def test_cancel_between_agents(tmp_path: Path) -> None:

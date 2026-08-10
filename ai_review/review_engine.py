@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import subprocess
@@ -10,6 +12,12 @@ import uuid
 from .agents import AGENT_ORDER, AgentResult, Finding, rule_based_decision, stricter_decision
 from .copilot import classify_copilot_error, resolve_copilot_command
 from .diff_collector import DiffSummary
+from .evaluation import (
+    DEFAULT_MAX_PARALLEL_REVIEWERS,
+    ExecutionStrategy,
+    validate_execution_strategy,
+    validate_max_parallel_reviewers,
+)
 from .processes import decode_output
 from .quality import QualityCheckResult
 from .repository import RepositoryContext
@@ -42,6 +50,8 @@ class EngineRequest:
     agent: str | None = None
     timeout_seconds: int = 120
     cancel_file: Path | None = None
+    orchestration_strategy: ExecutionStrategy = "sequential"
+    max_parallel_reviewers: int = DEFAULT_MAX_PARALLEL_REVIEWERS
 
 
 @dataclass(frozen=True)
@@ -52,6 +62,13 @@ class EngineResult:
     agent_results: list[AgentResult]
     final_decision: str
     max_concurrent_copilot_processes: int
+    execution_strategy: str = "sequential"
+    started_at: str | None = None
+    finished_at: str | None = None
+    duration_ms: int | None = None
+    agent_durations_ms: dict[str, int] | None = None
+    orchestrator_duration_ms: int | None = None
+    final_reviewer_duration_ms: int | None = None
 
 
 class CopilotClient:
@@ -81,6 +98,11 @@ class CopilotClient:
 
 def run_review_engine(request: EngineRequest, client: CopilotClient | None = None) -> EngineResult:
     client = client or CopilotClient()
+    strategy = validate_execution_strategy(request.orchestration_strategy)
+    max_parallel_reviewers = validate_max_parallel_reviewers(request.max_parallel_reviewers)
+    started_at = _now_iso()
+    started_monotonic = time.monotonic()
+
     secret_scan = scan_diff_for_secrets(request.diff)
     if secret_scan.blocked:
         return EngineResult(
@@ -90,41 +112,67 @@ def run_review_engine(request: EngineRequest, client: CopilotClient | None = Non
             agent_results=[],
             final_decision="BLOCKED",
             max_concurrent_copilot_processes=0,
+            execution_strategy=strategy,
+            started_at=started_at,
+            finished_at=_now_iso(),
+            duration_ms=_elapsed_ms(started_monotonic),
+            agent_durations_ms={},
+            orchestrator_duration_ms=0,
+            final_reviewer_duration_ms=None,
         )
+
     selected_agents = _select_agents(request.agent)
     if request.agent and request.agent not in AGENT_ORDER:
-        raise ReviewEngineError(f"未知のエージェントです: {request.agent}")
+        raise ReviewEngineError(f"unknown agent: {request.agent}")
 
     states = {agent: "pending" for agent in AGENT_ORDER}
     results: list[AgentResult] = []
-    max_concurrent = 0
-    current_concurrent = 0
-    failed = False
+    durations: dict[str, int] = {}
+    specialists = [agent for agent in selected_agents if agent != "final"]
 
-    for agent in selected_agents:
-        if _is_cancelled(request.cancel_file):
-            states[agent] = "cancelled"
-            raise AgentCancelledError(f"レビューがキャンセルされました: {request.run_id}")
-        states[agent] = "running"
-        current_concurrent += 1
-        max_concurrent = max(max_concurrent, current_concurrent)
-        started = time.monotonic()
+    orchestrator_started = time.monotonic()
+    if strategy == "limited_parallel" and len(specialists) > 1:
+        max_concurrent = min(max_parallel_reviewers, len(specialists))
+        failed = _run_specialists_limited_parallel(
+            request,
+            client,
+            specialists,
+            states,
+            results,
+            durations,
+            max_concurrent,
+        )
+    else:
+        max_concurrent = _run_specialists_sequential(
+            request,
+            client,
+            specialists,
+            states,
+            results,
+            durations,
+        )
+        failed = any(result.status == "failed" for result in results)
+    orchestrator_duration_ms = _elapsed_ms(orchestrator_started)
+
+    if "final" in selected_agents:
+        _raise_if_cancelled(request, states, "final")
+        states["final"] = "running"
+        final_started = time.monotonic()
         try:
-            prompt = _build_prompt(request, agent, results)
-            result = _run_agent_with_retry(client, prompt, request, agent)
+            prompt = _build_prompt(request, "final", results)
+            result = _run_agent_with_retry(client, prompt, request, "final")
             results.append(result)
-            states[agent] = "completed"
+            states["final"] = "completed"
         except subprocess.TimeoutExpired:
-            states[agent] = "failed"
+            states["final"] = "failed"
             failed = True
-            results.append(_failed_result(request.run_id, agent, "timeout"))
+            results.append(_failed_result(request.run_id, "final", "timeout"))
         except ReviewEngineError:
-            states[agent] = "failed"
+            states["final"] = "failed"
             failed = True
-            results.append(_failed_result(request.run_id, agent, "failed"))
+            results.append(_failed_result(request.run_id, "final", "failed"))
         finally:
-            current_concurrent -= 1
-            _ = started
+            durations["final"] = _elapsed_ms(final_started)
 
     for agent in AGENT_ORDER:
         if agent not in selected_agents and states[agent] == "pending":
@@ -143,7 +191,88 @@ def run_review_engine(request: EngineRequest, client: CopilotClient | None = Non
         agent_results=results,
         final_decision=stricter_decision(rules, ai_decision),
         max_concurrent_copilot_processes=max_concurrent,
+        execution_strategy=strategy,
+        started_at=started_at,
+        finished_at=_now_iso(),
+        duration_ms=_elapsed_ms(started_monotonic),
+        agent_durations_ms=durations,
+        orchestrator_duration_ms=orchestrator_duration_ms,
+        final_reviewer_duration_ms=durations.get("final"),
     )
+
+
+def _run_specialists_sequential(
+    request: EngineRequest,
+    client: CopilotClient,
+    agents: list[str],
+    states: dict[str, str],
+    results: list[AgentResult],
+    durations: dict[str, int],
+) -> int:
+    max_concurrent = 0
+    for agent in agents:
+        _raise_if_cancelled(request, states, agent)
+        states[agent] = "running"
+        max_concurrent = max(max_concurrent, 1)
+        started = time.monotonic()
+        try:
+            prompt = _build_prompt(request, agent, [])
+            result = _run_agent_with_retry(client, prompt, request, agent)
+            results.append(result)
+            states[agent] = "completed"
+        except subprocess.TimeoutExpired:
+            states[agent] = "failed"
+            results.append(_failed_result(request.run_id, agent, "timeout"))
+        except ReviewEngineError:
+            states[agent] = "failed"
+            results.append(_failed_result(request.run_id, agent, "failed"))
+        finally:
+            durations[agent] = _elapsed_ms(started)
+    return max_concurrent
+
+
+def _run_specialists_limited_parallel(
+    request: EngineRequest,
+    client: CopilotClient,
+    agents: list[str],
+    states: dict[str, str],
+    results: list[AgentResult],
+    durations: dict[str, int],
+    max_workers: int,
+) -> bool:
+    failed = False
+    completed: dict[str, AgentResult] = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {}
+        for agent in agents:
+            _raise_if_cancelled(request, states, agent)
+            states[agent] = "running"
+            futures[executor.submit(_run_one_specialist, request, client, agent)] = agent
+        for future in as_completed(futures):
+            agent = futures[future]
+            result, duration_ms = future.result()
+            durations[agent] = duration_ms
+            completed[agent] = result
+            states[agent] = "completed" if result.status != "failed" else "failed"
+            failed = failed or result.status == "failed"
+    for agent in agents:
+        results.append(completed[agent])
+    return failed
+
+
+def _run_one_specialist(
+    request: EngineRequest,
+    client: CopilotClient,
+    agent: str,
+) -> tuple[AgentResult, int]:
+    started = time.monotonic()
+    try:
+        prompt = _build_prompt(request, agent, [])
+        return _run_agent_with_retry(client, prompt, request, agent), _elapsed_ms(started)
+    except subprocess.TimeoutExpired:
+        return _failed_result(request.run_id, agent, "timeout"), _elapsed_ms(started)
+    except ReviewEngineError:
+        return _failed_result(request.run_id, agent, "failed"), _elapsed_ms(started)
 
 
 def _select_agents(requested_agent: str | None) -> list[str]:
@@ -162,11 +291,11 @@ def parse_agent_response(raw: str, *, run_id: str, agent: str) -> AgentResult:
     payload = _extract_json(raw)
     _validate_payload(payload)
     if payload["run_id"] != run_id:
-        raise AgentRunIdMismatchError("run_idが一致しません。")
+        raise AgentRunIdMismatchError("run_id mismatch")
     if payload["agent"] != agent:
-        raise AgentSchemaError("agentが一致しません。")
+        raise AgentSchemaError("agent mismatch")
     if payload["provider"] != "github-copilot-cli":
-        raise AgentSchemaError("providerが一致しません。")
+        raise AgentSchemaError("provider mismatch")
     findings = [_parse_finding(item) for item in payload.get("findings", [])]
     return AgentResult(
         run_id=payload["run_id"],
@@ -193,10 +322,10 @@ def _run_agent_with_retry(client: CopilotClient, prompt: str, request: EngineReq
             raise
         except AgentSchemaError as exc:
             last_error = exc
-            prompt += "\n\n前回の応答はSchemaに一致しません。JSON objectのみを返してください。"
+            prompt += "\n\nPrevious response did not match the schema. Return only a JSON object."
             if attempt == 1:
                 raise
-    raise last_error or AgentSchemaError("Schema検証に失敗しました。")
+    raise last_error or AgentSchemaError("schema validation failed")
 
 
 def new_run_id() -> str:
@@ -207,13 +336,13 @@ def _extract_json(raw: str) -> dict:
     start = raw.find("{")
     end = raw.rfind("}")
     if start == -1 or end == -1 or end < start:
-        raise AgentSchemaError("Copilot出力からJSONを抽出できません。")
+        raise AgentSchemaError("could not extract JSON object from Copilot output")
     try:
         payload = json.loads(raw[start : end + 1])
     except json.JSONDecodeError as exc:
-        raise AgentSchemaError("Copilot出力JSONが不正です。") from exc
+        raise AgentSchemaError("Copilot output JSON is invalid") from exc
     if not isinstance(payload, dict):
-        raise AgentSchemaError("Copilot出力JSONはobjectである必要があります。")
+        raise AgentSchemaError("Copilot output JSON must be an object")
     return payload
 
 
@@ -221,11 +350,11 @@ def _validate_payload(payload: dict) -> None:
     required = {"run_id", "agent", "provider", "schema_version", "decision", "findings", "summary"}
     missing = required - payload.keys()
     if missing:
-        raise AgentSchemaError(f"必須キーが不足しています: {', '.join(sorted(missing))}")
+        raise AgentSchemaError(f"required keys are missing: {', '.join(sorted(missing))}")
     if payload["decision"] not in {"APPROVE", "APPROVE_WITH_NOTES", "CHANGES_REQUIRED", "BLOCKED", "INCONCLUSIVE"}:
-        raise AgentSchemaError("decisionが不正です。")
+        raise AgentSchemaError("decision is invalid")
     if not isinstance(payload["findings"], list):
-        raise AgentSchemaError("findingsは配列である必要があります。")
+        raise AgentSchemaError("findings must be an array")
     if "status" in payload and payload["status"] not in {"completed", "inconclusive", "blocked", "failed"}:
         raise AgentSchemaError("status is invalid")
     if "reviewer_states" in payload and not isinstance(payload["reviewer_states"], dict):
@@ -236,11 +365,11 @@ def _validate_payload(payload: dict) -> None:
         raise AgentSchemaError("incomplete_review must be a boolean")
     for finding in payload["findings"]:
         if not isinstance(finding, dict):
-            raise AgentSchemaError("findingはobjectである必要があります。")
+            raise AgentSchemaError("finding must be an object")
         if finding.get("severity") not in {"Critical", "Major", "Minor", "Info"}:
-            raise AgentSchemaError("finding severityが不正です。")
+            raise AgentSchemaError("finding severity is invalid")
         if not isinstance(finding.get("message"), str) or not finding.get("message", "").strip():
-            raise AgentSchemaError("finding messageが不正です。")
+            raise AgentSchemaError("finding message is invalid")
 
 
 def _parse_finding(item: dict) -> Finding:
@@ -255,13 +384,12 @@ def _build_prompt(request: EngineRequest, agent: str, previous: list[AgentResult
     prompt_path = Path(__file__).resolve().parent.parent / "agents" / f"{agent}.md"
     prompt = prompt_path.read_text(encoding="utf-8")
     payload = _build_final_prompt_payload(request, previous) if agent == "final" else _build_agent_prompt_payload(
-        request, agent, previous
+        request, agent
     )
-    return prompt + "\n\nJSONで回答してください。\nPAYLOAD_JSON\n" + json.dumps(payload, ensure_ascii=False)
+    return prompt + "\n\nReturn JSON only.\nPAYLOAD_JSON\n" + json.dumps(payload, ensure_ascii=False)
 
 
-def _build_agent_prompt_payload(request: EngineRequest, agent: str, previous: list[AgentResult]) -> dict[str, object]:
-    previous_summary = [asdict(item) for item in previous[-2:]]
+def _build_agent_prompt_payload(request: EngineRequest, agent: str) -> dict[str, object]:
     return {
         "run_id": request.run_id,
         "agent": agent,
@@ -271,7 +399,6 @@ def _build_agent_prompt_payload(request: EngineRequest, agent: str, previous: li
         "diff_line_count": request.diff.diff_line_count,
         "truncated": request.diff.truncated,
         "quality_checks": [asdict(item) for item in request.quality_checks],
-        "previous_results": previous_summary,
         "diff": request.diff.diff_text,
     }
 
@@ -325,5 +452,19 @@ def _failed_result(run_id: str, agent: str, reason: str) -> AgentResult:
     )
 
 
+def _raise_if_cancelled(request: EngineRequest, states: dict[str, str], agent: str) -> None:
+    if _is_cancelled(request.cancel_file):
+        states[agent] = "cancelled"
+        raise AgentCancelledError(f"review was cancelled: {request.run_id}")
+
+
 def _is_cancelled(cancel_file: Path | None) -> bool:
     return bool(cancel_file and cancel_file.exists())
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _elapsed_ms(started: float) -> int:
+    return int((time.monotonic() - started) * 1000)

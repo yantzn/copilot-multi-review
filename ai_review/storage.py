@@ -150,16 +150,23 @@ def save_review_result(
         "truncated": diff.truncated,
         "quality_checks": [asdict(item) for item in quality_checks],
         "agent_states": engine_result.agent_states,
+        "execution_strategy": engine_result.execution_strategy,
+        "orchestrator_duration_ms": engine_result.orchestrator_duration_ms,
+        "final_reviewer_duration_ms": engine_result.final_reviewer_duration_ms,
+        "agent_durations_ms": engine_result.agent_durations_ms or {},
         "copilot_cli_version": copilot_version,
         "run_id": run_id,
-        "started_at": now_iso(),
-        "finished_at": now_iso(),
+        "started_at": engine_result.started_at or now_iso(),
+        "finished_at": engine_result.finished_at or now_iso(),
+        "duration_ms": engine_result.duration_ms,
     }
     final_json = {
         "run_id": run_id,
         "project_id": repository.project_id,
         "decision": engine_result.final_decision,
         "max_concurrent_copilot_processes": engine_result.max_concurrent_copilot_processes,
+        "execution_strategy": engine_result.execution_strategy,
+        "incomplete_review": any(state in {"failed", "cancelled", "pending"} for state in engine_result.agent_states.values()),
     }
     (history_dir / "run.json").write_text(json.dumps(run_json, ensure_ascii=False, indent=2), encoding="utf-8")
     (history_dir / "final.json").write_text(json.dumps(final_json, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -209,9 +216,11 @@ def _render_report(run_json: dict, final_json: dict) -> str:
             f"- run_id: {run_json['run_id']}",
             f"- target: {run_json['target']}",
             f"- decision: {final_json['decision']}",
+            f"- execution_strategy: {final_json.get('execution_strategy', 'sequential')}",
             f"- changed files: {run_json['changed_file_count']}",
             f"- diff lines: {run_json['diff_line_count']}",
             f"- truncated: {run_json['truncated']}",
+            f"- duration_ms: {run_json.get('duration_ms')}",
             "",
         ]
     )

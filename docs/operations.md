@@ -98,3 +98,39 @@ Validated in this development environment:
 10. Windows BAT/CMD: automated command construction tests passed
 
 Manual GUI selection and real Copilot CLI execution were not performed because this environment is headless for UI confirmation and Copilot CLI is not installed.
+
+## Issue #29 Subagent Evaluation Operations
+
+Recommended standard path:
+
+```text
+VS Code -> Copilot Chat -> Agent selection -> Review Orchestrator
+```
+
+The selected standard execution strategy is `native`. This uses the standard GitHub Copilot / VS Code Subagent UI. It must not be described as guaranteed full parallel execution.
+
+Python CLI helper paths:
+
+```bash
+ai-review review --repo <path> --target base --orchestration-strategy sequential
+ai-review review --repo <path> --target base --orchestration-strategy limited_parallel --max-parallel-reviewers 2
+```
+
+Use these helper strategies for controlled comparison and deterministic report persistence. Do not promote the legacy Python nine-call sequential runner back to the standard path.
+
+Evaluation artifacts:
+
+```text
+tests/fixtures/subagent_evaluation_scenarios.json
+docs/subagent-evaluation.md
+docs/subagent-evaluation-results-2026-08-10.json
+```
+
+Failure meanings:
+
+- specialist failed: Final Reviewer may still run, but final decision must not be `APPROVE`
+- Final Reviewer failed: final decision must not be `APPROVE`
+- secret scan blocked: Copilot is not invoked and final decision is `BLOCKED`
+- Chat UI unavailable: record `BLOCKED` or `NOT_OBSERVABLE`, not `PASS`
+
+Windows Japanese path check uses a path like `C:\...\レビュー対象\サンプル` and verifies repository resolution, diff collection, UTF-8 handling, subprocess-safe prompt construction, report output, and run history.

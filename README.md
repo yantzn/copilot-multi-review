@@ -182,3 +182,56 @@ python -m json.tool .vscode/extensions.json
 ```
 
 詳しい設計は`docs/architecture.md`、運用手順は`docs/operations.md`、復旧方法は`docs/troubleshooting.md`を参照してください。
+## Issue #29 Subagent Standard
+
+Recommended standard path:
+
+```text
+VS Code -> Copilot Chat -> Agent selection -> Review Orchestrator
+```
+
+Standard execution strategy: `native`
+
+`native` means Review Orchestrator uses the standard GitHub Copilot / VS Code Subagent delegation behavior. It does not guarantee full parallel execution of every reviewer.
+
+Reviewer topology:
+
+```text
+Review Orchestrator
+  -> Requirements Reviewer
+  -> Correctness Reviewer
+  -> Security Reviewer
+  -> Testing Reviewer
+  -> Maintainability Reviewer
+  -> Performance Reviewer
+  -> Operations Reviewer
+  -> Devil Advocate
+  -> Final Reviewer
+  -> Python deterministic decision
+```
+
+The Python CLI remains a helper and comparison path:
+
+```bash
+ai-review review --repo <path> --target base --orchestration-strategy sequential
+ai-review review --repo <path> --target base --orchestration-strategy limited_parallel --max-parallel-reviewers 2
+```
+
+Failure meanings:
+
+- confirmed secret: `BLOCKED`, no Copilot invocation
+- specialist failure: Final Reviewer may run, but final decision must not be `APPROVE`
+- Final Reviewer failure: final decision must not be `APPROVE`
+- unavailable Chat UI or credit data: record `BLOCKED`, `NOT_OBSERVABLE`, or `Unavailable`, not guessed values
+
+Evaluation records:
+
+- `docs/subagent-evaluation.md`
+- `docs/subagent-evaluation-results-2026-08-10.json`
+- `tests/fixtures/subagent_evaluation_scenarios.json`
+
+AI credits: current GitHub Copilot interfaces do not expose per-subagent/per-reviewer credit usage for this architecture. Do not estimate credits from token count, prompt length, duration, or fixed coefficients.
+
+Windows: UTF-8 paths such as `C:\...\レビュー対象\サンプル` are covered by automated tests for repository resolution, diff collection, subprocess-safe execution, report output, and run history.
+
+Issue #6 status: legacy and superseded by #23-#29 for the standard path. It was the original closed Python nine-reviewer sequential MVP and must not be restored as the standard.
