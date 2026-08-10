@@ -110,12 +110,34 @@ If a Controller-originated workflow supplies a `run_id` in the context passed to
 Environment recorded for Issue #28:
 
 - OS: Windows
-- VS Code: to be filled during manual execution
-- GitHub Copilot extension: to be filled during manual execution
-- GitHub Copilot Chat / Agent mode: enabled
+- Date: 2026-08-10
+- VS Code: 1.132.0, commit `df53daabb18cd157bdb08c7f01c34df936cf12f4`, x64
+- GitHub Copilot extension: not installed in this Windows VS Code profile
+- GitHub Copilot Chat / Agent mode: blocked because the GitHub Copilot extension is not installed
 - Repository: `yantzn/copilot-multi-review`
 
-Steps:
+Evidence collected:
+
+- `code --version` returned VS Code `1.132.0`.
+- `code --list-extensions --show-versions` did not list `GitHub.copilot` or `GitHub.copilot-chat`.
+- The only extension name containing `copilot` was `ms-azuretools.vscode-azure-github-copilot@1.0.230`, which is not GitHub Copilot Chat.
+
+Representative scenario result:
+
+| Check | Result | Notes |
+| --- | --- | --- |
+| Review Orchestrator picker visibility | BLOCKED | Copilot Chat agent picker is unavailable without GitHub Copilot Chat. |
+| Specialists hidden from picker | BLOCKED / Static PASS | Runtime picker check is blocked; static config uses `user-invocable: false` for specialist reviewers and `Final Reviewer`. |
+| Specialist subagent invoked | BLOCKED | Requires Copilot Chat agent execution. |
+| Agent name visible | BLOCKED | Requires Copilot Chat subagent tool call UI. |
+| Tool call expandable | BLOCKED | Requires Copilot Chat subagent tool call UI. |
+| Prompt/context visible | BLOCKED | Requires expanded Copilot Chat subagent tool call details. |
+| Tool usage visible | BLOCKED | Requires expanded Copilot Chat subagent tool call details. |
+| Result visible | BLOCKED | Requires Copilot Chat subagent execution. |
+| Final Reviewer invoked as subagent | BLOCKED / Static PASS | Runtime check is blocked; `Review Orchestrator` explicitly lists `Final Reviewer` and instructs `agent` tool delegation. |
+| Failure/incomplete state distinguishable | BLOCKED / Static PASS | Runtime UI check is blocked; Orchestrator contract requires `failed`, `blocked`, `inconclusive`, `missing`, `skipped`, and `not_run` to remain explicit. |
+
+Manual steps for an environment with GitHub Copilot Chat installed:
 
 1. Open this repository in VS Code on Windows.
 2. Open GitHub Copilot Chat.
@@ -146,3 +168,10 @@ Expected:
 - Specialist reviewer results are independent.
 - Only `Final Reviewer` receives specialist results.
 - No custom UI, WebView, HTML reviewer dashboard, terminal spinner, or progress simulation appears.
+
+Current E2E conclusion:
+
+- The Windows E2E was attempted and recorded on 2026-08-10.
+- Runtime Copilot Chat validation is blocked in this environment because GitHub Copilot Chat is not installed.
+- Static repository checks cover the agent topology, picker visibility intent, subagent availability, and Orchestrator contract.
+- A follow-up manual run on a Windows VS Code profile with GitHub Copilot Chat installed should replace the `BLOCKED` runtime rows with PASS/FAIL/PARTIAL observations from the actual UI.

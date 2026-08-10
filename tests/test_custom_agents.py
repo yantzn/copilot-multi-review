@@ -206,8 +206,24 @@ def test_copilot_chat_review_ux_documentation_exists() -> None:
         "run_id",
         "Windows Manual E2E Record",
         "No custom progress UI",
+        "VS Code: 1.132.0",
+        "GitHub Copilot extension: not installed",
+        "BLOCKED",
     ]:
         assert term in text
+
+    assert "to be filled" not in text
+
+
+def test_issue_28_e2e_results_are_recorded_not_left_as_placeholders() -> None:
+    text = Path("docs/e2e-results.md").read_text(encoding="utf-8")
+    section = text.split("## Issue #28 Windows Copilot Chat Subagent UX", 1)[1]
+
+    assert "VS Code: 1.132.0" in section
+    assert "GitHub Copilot extension: not installed" in section
+    assert "BLOCKED" in section
+    assert "Manual Required" not in section
+    assert "manual check required" not in section.lower()
 
 
 def test_final_reviewer_documents_dedup_and_provenance_contract() -> None:
