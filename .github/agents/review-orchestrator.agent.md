@@ -92,6 +92,10 @@ When delegating to a specialist subagent, provide the relevant available context
 - `truncation_status`: whether diff/context is complete, truncated, summarized, or unknown.
 - `secret_scan_status`: whether secret scanning passed, failed, blocked, or was not run.
 - `quality_check_status`: whether quality checks passed, failed, were skipped, or are unknown.
+- `requirements_context`: requirement files and their content/provenance collected by Python when available.
+- `design_context`: structured design context collected from supported project-local design files. Excel entries should preserve source file, sheet, and cell provenance.
+- `project_rules`: explicit project rule documents and provenance.
+- `project_context_warnings`: unsupported formats, truncation, or extraction limitations. Never hide these warnings.
 - `run_id`: include this only when it was supplied by the Python Review Controller or by the user. If the user starts a Chat-only review and no run_id exists, do not invent, persist, or imply one.
 For primary specialist reviewer execution, do not provide `previous_findings`, other reviewer findings, other reviewer severities, other reviewer summaries, previous reviewer conclusions, or Final Reviewer judgments. Primary specialist reviewers must independently evaluate the same primary diff/context. This independence rule does not apply to `Devil Advocate`, which is intentionally invoked only after primary specialist results are collected.
 
