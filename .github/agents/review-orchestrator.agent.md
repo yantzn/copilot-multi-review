@@ -6,6 +6,8 @@ tools: ['search/codebase', 'search/usages', 'web/fetch', 'agent']
 agents:
   - Requirements Reviewer
   - Correctness Reviewer
+  - Design Conformance Reviewer
+  - Project Rules Reviewer
   - Security Reviewer
   - Testing Reviewer
   - Maintainability Reviewer
@@ -60,12 +62,14 @@ Delegate to these Custom Agent subagents by exact agent name:
 
 - `Requirements Reviewer`: requirements, acceptance criteria, requested scope, and compatibility.
 - `Correctness Reviewer`: implementation logic, data flow, state transitions, and error handling.
+- `Design Conformance Reviewer`: 明示された設計書・設計情報と実装の整合性。参照元ファイル、シート、節、セル範囲などの provenance を保持する。
+- `Project Rules Reviewer`: 明示されたプロジェクト固有ルールと実装の適合性。存在しない規則を一般論から作らない。
 - `Security Reviewer`: auth, secrets, command execution, injection, permissions, and unsafe operations.
 - `Testing Reviewer`: meaningful test coverage for changed behavior, abnormal paths, and regressions.
 - `Maintainability Reviewer`: responsibility boundaries, duplication, readability, cohesion, coupling, and change cost.
 - `Performance Reviewer`: meaningful latency, I/O, memory, scaling, and subprocess cost risks.
 - `Operations Reviewer`: runtime, locks, cancellation, rerun, diagnostics, platform behavior, and CLI UX.
-- `Devil Advocate`: hidden assumptions, fail-open behavior, unexpected user paths, and migration risks.
+- `Devil Advocate`: 一次レビュー結果を受け取り、「その指摘は本当に成立するか」を反証する二次レビュー担当。新しい問題を大量に探す役割ではない。
 - `Final Reviewer`: final synthesis, duplicate finding merge, provenance retention, severity conflict resolution, reviewer conflict detection, incomplete review reporting, and AI decision candidate generation.
 
 The Python Review Controller prepares safe context and validates the returned Final Reviewer result. Deprecated legacy Python prompts under `agents/*.md` may exist only for migration compatibility and are not the standard orchestration path. Do not invent results for missing subagents. If a needed specialist subagent is unavailable, mark that reviewer as `missing` or `not_run` and explain the impact.
@@ -89,7 +93,7 @@ When delegating to a specialist subagent, provide the relevant available context
 - `secret_scan_status`: whether secret scanning passed, failed, blocked, or was not run.
 - `quality_check_status`: whether quality checks passed, failed, were skipped, or are unknown.
 - `run_id`: include this only when it was supplied by the Python Review Controller or by the user. If the user starts a Chat-only review and no run_id exists, do not invent, persist, or imply one.
-For specialist reviewer execution, do not provide `previous_findings`, other reviewer findings, other reviewer severities, other reviewer summaries, previous reviewer conclusions, or Final Reviewer judgments. Specialist reviewers must independently evaluate the same primary diff/context. Reviewer results are collected only after specialist execution and are reserved for the later final integration phase.
+For primary specialist reviewer execution, do not provide `previous_findings`, other reviewer findings, other reviewer severities, other reviewer summaries, previous reviewer conclusions, or Final Reviewer judgments. Primary specialist reviewers must independently evaluate the same primary diff/context. This independence rule does not apply to `Devil Advocate`, which is intentionally invoked only after primary specialist results are collected.
 
 Mandatory context rules:
 
@@ -123,6 +127,28 @@ Preserve the meaning of the existing final decision vocabulary:
 
 Do not reinterpret or replace those final decisions. Do not produce an independent final approval decision. The Final Reviewer or existing Python ReviewEngine owns final synthesis and final decision semantics.
 
+## Devil Advocate Input Contract
+
+After all selected primary specialist reviewers have completed or been explicitly accounted for, invoke `Devil Advocate` once with:
+
+- all primary specialist results
+- reviewer states
+- minimal target metadata
+- relevant requirements context
+- relevant design context, including provenance when available
+- explicit project rules
+- truncation, secret scan, and quality check status
+
+The Devil Advocate must challenge the validity of each reported finding and classify it as one of:
+
+- 維持候補
+- 重大度見直し候補
+- 人間確認へ移動
+- 根拠不足による棄却候補
+- 追加情報が必要
+
+It must not invent a counterargument merely to disagree. Preserve the original finding identity so the Final Reviewer can trace every challenge decision.
+
 ## Final Reviewer Input Contract
 
 After all selected specialist reviewers have completed or have been explicitly accounted for, invoke `Final Reviewer` with only the integration context it needs:
@@ -135,7 +161,8 @@ After all selected specialist reviewers have completed or have been explicitly a
 - `truncation_status`: whether diff/context is complete, truncated, summarized, or unknown.
 - `secret_scan_status`: whether secret scanning passed, failed, blocked, skipped, not_run, or unknown.
 - `quality_check_status`: whether quality checks passed, failed, skipped, not_run, or unknown.
-- `specialist_results`: all specialist results, in any order, using the Subagent Result Contract.
+- `specialist_results`: all primary specialist results, in any order, using the Subagent Result Contract.
+- `devil_advocate_result`: the second-stage challenge result for the primary findings.
 - `reviewer_states`: every selected, required, failed, skipped, missing, not_run, blocked, or inconclusive reviewer state.
 - `run_id`: only when supplied by the Python Review Controller or the user.
 
@@ -188,9 +215,10 @@ Use the minimum read-only context needed to coordinate the review. If a requeste
 5. Keep specialist reviewers independent: do not pass other reviewer results to any specialist reviewer.
 6. Track every selected reviewer outcome using the Subagent Result Contract.
 7. Mark unavailable, failed, skipped, not_run, blocked, inconclusive, and missing reviewers explicitly.
-8. Pass all specialist results, reviewer states, and minimal integration context to the Final Reviewer by using the `agent` tool.
-9. Receive the Final Reviewer integrated result.
-10. Return the integrated result in a form that can be handed to Python rule-based decision and safer/stricter final decision logic.
+8. Pass the complete primary reviewer results to `Devil Advocate` and receive the challenge result.
+9. Pass all primary specialist results, the Devil Advocate result, reviewer states, and minimal integration context to the Final Reviewer by using the `agent` tool.
+10. Receive the Final Reviewer integrated result.
+11. Return the integrated result in a form that can be handed to Python rule-based decision and safer/stricter final decision logic.
 
 ## User-visible Chat Trace
 
@@ -203,3 +231,16 @@ Rely on Copilot Chat's standard subagent display for progress and result inspect
 - the returned reviewer result
 
 When reporting back in text, summarize the reviewer states without pretending to know UI-specific icons, labels, or version-dependent wording.
+
+
+## Project-Aware Context
+
+When available, treat the following as first-class review evidence:
+
+- requirements / Issue / acceptance criteria
+- structured design context extracted from Excel, CSV, Markdown, or PDF
+- design provenance: source file, sheet/section, cell range/page, design item ID
+- explicit project rules
+- test, lint, and static-analysis results
+
+Do not assume that an Excel workbook was understood merely because it was attached. Prefer structured design context produced by a read-only parser, and surface missing or lossy extraction as missing context.
