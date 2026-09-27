@@ -120,7 +120,7 @@ class PayloadKind(Enum):
     PRIMARY = "primary"
 
 
-def test_standard_path_invokes_orchestrator_once_not_nine_agents(tmp_path: Path) -> None:
+def test_standard_path_invokes_orchestrator_once_not_all_reviewers(tmp_path: Path) -> None:
     repo = init_repo(tmp_path / "repo")
     client = FakeClient()
 
@@ -132,7 +132,7 @@ def test_standard_path_invokes_orchestrator_once_not_nine_agents(tmp_path: Path)
     assert all(state == "completed" for state in result.agent_states.values())
 
 
-def test_legacy_runs_nine_agents_serially(tmp_path: Path) -> None:
+def test_legacy_runs_eleven_agents_serially(tmp_path: Path) -> None:
     repo = init_repo(tmp_path / "repo")
     client = FakeClient()
     request = request_for(repo)
