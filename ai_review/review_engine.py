@@ -21,6 +21,7 @@ from .evaluation import (
     validate_max_parallel_reviewers,
 )
 from .processes import decode_output
+from .project_context import collect_project_context
 from .quality import QualityCheckResult
 from .repository import RepositoryContext
 from .secrets import scan_diff_for_secrets
@@ -527,6 +528,10 @@ def parse_agent_response(raw: str, *, run_id: str, agent: str) -> AgentResult:
         reviewer_states=payload.get("reviewer_states"),
         conflicts=payload.get("conflicts"),
         incomplete_review=payload.get("incomplete_review"),
+        human_checks=payload.get("human_checks"),
+        challenge_decisions=payload.get("challenge_decisions"),
+        excluded_findings=payload.get("excluded_findings"),
+        review_coverage=payload.get("review_coverage"),
     )
 
 
@@ -585,6 +590,10 @@ def _validate_payload(payload: dict) -> None:
         "reviewer_states",
         "conflicts",
         "incomplete_review",
+        "human_checks",
+        "challenge_decisions",
+        "excluded_findings",
+        "review_coverage",
     }
     unknown = set(payload) - allowed_top_level
     if unknown:
@@ -609,6 +618,13 @@ def _validate_payload(payload: dict) -> None:
         payload["incomplete_review"], bool
     ):
         raise AgentSchemaError("incomplete_review must be a boolean or null")
+    for field in ("human_checks", "challenge_decisions", "excluded_findings"):
+        if field in payload and payload[field] is not None and not isinstance(payload[field], list):
+            raise AgentSchemaError(f"{field} must be an array or null")
+    if "review_coverage" in payload and payload["review_coverage"] is not None and not isinstance(
+        payload["review_coverage"], dict
+    ):
+        raise AgentSchemaError("review_coverage must be an object or null")
     for finding in payload["findings"]:
         if not isinstance(finding, dict):
             raise AgentSchemaError("finding must be an object")
@@ -659,6 +675,7 @@ def _build_orchestrator_prompt(request: EngineRequest) -> str:
 
 
 def _build_orchestrator_payload(request: EngineRequest) -> dict[str, object]:
+    project_context = collect_project_context(request.repository.root)
     return {
         "run_id": request.run_id,
         "execution_mode": "subagent",
@@ -696,6 +713,10 @@ def _build_orchestrator_payload(request: EngineRequest) -> dict[str, object]:
             }
             for check in request.quality_checks
         ],
+        "requirements_context": project_context["requirements"],
+        "design_context": project_context["design_context"],
+        "project_rules": project_context["project_rules"],
+        "project_context_warnings": project_context["warnings"],
         "common_output_schema": "schemas/agent-result.schema.json",
         "diff": request.diff.diff_text,
     }
@@ -862,6 +883,8 @@ def _canonical_agent_key(value: str) -> str:
     mapping = {
         "requirements_reviewer": "requirements",
         "correctness_reviewer": "correctness",
+        "design_conformance_reviewer": "design_conformance",
+        "project_rules_reviewer": "project_rules",
         "security_reviewer": "security",
         "testing_reviewer": "testing",
         "maintainability_reviewer": "maintainability",
