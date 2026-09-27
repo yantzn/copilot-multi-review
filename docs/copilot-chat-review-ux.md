@@ -23,7 +23,7 @@ Review the changes corresponding to PR #123.
 
 5. The Orchestrator uses the `agent` tool to invoke specialist reviewers as subagents.
 6. Expand the standard Copilot Chat subagent tool calls to inspect the invoked reviewer name, prompt/context, tool usage when exposed by Copilot, and returned result.
-7. Confirm that `Final Reviewer` ran as a subagent and integrated the specialist results.
+7. Confirm that `Devil Advocate` ran after the primary reviewers and challenged their findings. Then confirm that `Final Reviewer` integrated both primary and challenge results.
 
 The CLI remains available for headless and supplementary workflows. It is not the primary UI for observing subagent progress.
 
@@ -53,6 +53,8 @@ The specialist agents are kept role-named but are marked as subagent-only:
 
 - `Requirements Reviewer`
 - `Correctness Reviewer`
+- `Design Conformance Reviewer`
+- `Project Rules Reviewer`
 - `Security Reviewer`
 - `Testing Reviewer`
 - `Maintainability Reviewer`
