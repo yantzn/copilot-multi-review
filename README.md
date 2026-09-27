@@ -112,9 +112,9 @@ VS Code
 -> Review Orchestrator
 ```
 
-`Review Orchestrator`はレビュー専用の入口です。詳細レビューは専門Subagentへ委譲し、Python ReviewEngine / CLIレビュー経路は維持します。詳しい責務境界は`docs/architecture.md`を参照してください。
+`Review Orchestrator`はレビュー専用の入口です。詳細レビューは専門Subagentへ委譲し、Python ReviewEngine / CLIレビュー経路は維持します。一次レビュー後に`Devil Advocate`が各指摘を反証し、その後`Final Reviewer`が総合整理します。設計書・プロジェクト固有ルールを含むレビュー方針は`docs/project-aware-review.md`、責務境界は`docs/architecture.md`を参照してください。
 
-専門Reviewerは互いの結果を見ずに独立レビューを行い、`Final Reviewer`だけが全専門結果を受け取って重複排除、provenance保持、矛盾整理、AI統合decision候補生成を担当します。最終判定では既存のPython rule-based decisionとの安全側統合を維持します。
+一次レビュー担当は互いの結果を見ずに独立レビューを行います。一次結果を`Devil Advocate`が反証し、`Final Reviewer`が一次結果と反証結果を受け取って重複排除、provenance保持、矛盾整理、AI統合decision候補生成を担当します。最終判定では既存のPython rule-based decisionとの安全側統合を維持します。
 
 ## エージェント
 
@@ -240,3 +240,17 @@ Evaluation records:
 AI credits: current GitHub Copilot interfaces do not expose per-subagent/per-reviewer credit usage for this architecture. Do not estimate credits from token count, prompt length, duration, or fixed coefficients.
 
 Issue #6 status: legacy and superseded by #23-#29 for the standard path. It was the original closed Python nine-reviewer sequential MVP and must not be restored as the standard.
+
+
+## プロジェクト適合型レビュー
+
+標準Custom Agent経路では、コードだけでなく、明示された要件・設計情報・プロジェクト固有ルールもレビュー根拠として扱えます。
+
+追加した一次レビュー担当:
+
+- `Design Conformance Reviewer`: 設計書と実装の整合性
+- `Project Rules Reviewer`: プロジェクト固有ルールとの適合性
+
+一次レビュー完了後、`Devil Advocate`が誤検出・過剰断定・根拠不足を反証し、その後`Final Reviewer`が総合整理します。利用者向けの成果物名・判定指標は可能な限り日本語で表記します。
+
+詳細: `docs/project-aware-review.md`
