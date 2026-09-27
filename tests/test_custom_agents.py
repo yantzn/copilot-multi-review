@@ -533,6 +533,8 @@ tools: ['agent']
 agents:
   - Requirements Reviewer
   - Correctness Reviewer
+  - Design Conformance Reviewer
+  - Project Rules Reviewer
   - Security Reviewer
   - Testing Reviewer
   - Maintainability Reviewer
@@ -573,6 +575,8 @@ tools: ['agent']
 agents:
   - Requirements Reviewer
   - Correctness Reviewer
+  - Design Conformance Reviewer
+  - Project Rules Reviewer
   - Security Reviewer
   - Testing Reviewer
   - Maintainability Reviewer
