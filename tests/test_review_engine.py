@@ -150,6 +150,8 @@ def test_legacy_runs_nine_agents_serially(tmp_path: Path) -> None:
     assert client.calls == [
         "requirements",
         "correctness",
+        "design_conformance",
+        "project_rules",
         "security",
         "testing",
         "maintainability",
