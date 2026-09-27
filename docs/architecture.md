@@ -70,9 +70,10 @@ Python acts as the Review Controller:
 Copilot Custom Agents perform review and synthesis:
 
 - Review Orchestrator delegates only.
-- The eight Specialist Reviewers analyze independently.
-- Specialist Reviewers do not receive `previous_results`, `prior_findings`, `other_reviewer_results`, or equivalent cross-reviewer state.
-- Only the Final Reviewer receives all specialist results and reviewer states.
+- Primary Specialist Reviewers analyze independently.
+- Primary Specialist Reviewers do not receive `previous_results`, `prior_findings`, `other_reviewer_results`, or equivalent cross-reviewer state.
+- Devil Advocate runs after primary review and receives the primary findings for challenge review.
+- Final Reviewer receives both primary specialist results and the Devil Advocate result.
 - The Final Reviewer returns an AI-side decision candidate, not the final authority.
 
 AI output is untrusted input. Python must validate it before decision or persistence.
@@ -81,13 +82,15 @@ Deprecated `legacy` mode keeps the old Python-driven serial runner temporarily:
 
 1. requirements
 2. correctness
-3. security
-4. testing
-5. maintainability
-6. performance
-7. operations
-8. devil_advocate
-9. final
+3. design_conformance
+4. project_rules
+5. security
+6. testing
+7. maintainability
+8. performance
+9. operations
+10. devil_advocate
+11. final
 
 Legacy mode is not a co-equal standard implementation. It exists only for migration compatibility through `--execution-mode legacy`. Removal is allowed after downstream CLI users no longer need Python to invoke `agents/*.md`; the responsibilities removed will be specialist AI invocation, reviewer result handoff, and Python-side Final Reviewer invocation.
 
@@ -200,7 +203,7 @@ The Custom Agent side is responsible for:
 - delegation of final synthesis to the Final Reviewer when available
 - explanation of agent execution state to the user
 
-The Review Orchestrator must not perform detailed requirements, correctness, security, testing, maintainability, performance, operations, devil advocate, or final decision review itself. It coordinates specialist work and reports missing, failed, blocked, or inconclusive reviewer outcomes.
+The Review Orchestrator must not perform detailed requirements, correctness, design-conformance, project-rules, security, testing, maintainability, performance, operations, devil-advocate, or final decision review itself. It coordinates specialist work and reports missing, failed, blocked, or inconclusive reviewer outcomes.
 
 The Final Reviewer is a read-only leaf Custom Agent. It performs synthesis only:
 
@@ -291,3 +294,26 @@ Timing fields are additive and backward compatible:
 - `final.json.incomplete_review`
 
 Evaluation schema and results are documented in `docs/subagent-evaluation.md` and `docs/subagent-evaluation-results-2026-08-10.json`.
+
+
+## Project-Aware Context Collection
+
+Python Review Controller collects explicit project-local context before invoking the Orchestrator.
+
+- requirements: `requirements/**`, `docs/requirements.md`, README
+- project rules: `project-rules/**`, `AGENTS.md`, `.github/copilot-instructions.md`
+- design documents: supported text files and `.xlsx` under `design/**` or `docs/**`
+
+`.xlsx` is parsed read-only with openpyxl. Each extracted design entry keeps source file, sheet, and cell coordinates. Shapes, images, colors, borders, and other visual semantics are not inferred. Unsupported `.xls` and PDF files are surfaced as warnings rather than silently treated as understood.
+
+The intended review flow is:
+
+```text
+Python Review Controller
+  -> Review Orchestrator
+  -> independent primary reviewers
+  -> Devil Advocate challenge review
+  -> Final Reviewer synthesis
+  -> Python deterministic reconciliation
+  -> human final judgment
+```
