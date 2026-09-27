@@ -180,6 +180,10 @@ Conceptual top-level fields:
 - `reviewer_states`
 - `conflicts`
 - `incomplete_review`
+- `human_checks`: AIだけで確定せず人間へ戻す事項
+- `challenge_decisions`: Devil Advocateによる元指摘ごとの反証判定
+- `excluded_findings`: 反証後に根拠不足などで最終指摘から外した項目と理由
+- `review_coverage`: reviewed / not_reviewed / missing_context を含むレビュー範囲
 
 Each finding should retain the common Finding contract:
 
@@ -226,3 +230,15 @@ Never edit files, generate patches, apply patches, run terminal commands, invoke
 6. レビュー実施範囲と未確認範囲
 
 設計整合性の指摘では、取得できる場合は設計書ファイル、シート/節、セル範囲/ページ、設計項目IDを根拠に含めてください。
+
+
+## Benchmark Traceability
+
+ベンチマークで反証効果を測れるよう、可能な限り次を構造化して返してください。
+
+- `challenge_decisions`: 元レビュー担当、元指摘を識別できる情報、反証判定、反証根拠
+- `excluded_findings`: 除外した指摘、除外理由、元レビュー担当
+- `human_checks`: 確認事項、判断が必要な理由、確認済み根拠、不足情報
+- `review_coverage`: `reviewed`, `not_reviewed`, `missing_context`
+
+これらは監査・ベンチマーク用であり、AIへPR承認権限を与えるものではありません。
