@@ -3,55 +3,204 @@
   "title": "AgentResult",
   "type": "object",
   "additionalProperties": false,
-  "required": ["run_id", "agent", "provider", "schema_version", "decision", "findings", "summary"],
+  "required": [
+    "run_id",
+    "agent",
+    "provider",
+    "schema_version",
+    "decision",
+    "findings",
+    "summary"
+  ],
   "properties": {
-    "run_id": { "type": "string" },
-    "agent": { "type": "string" },
-    "provider": { "const": "github-copilot-cli" },
-    "schema_version": { "type": "string" },
+    "run_id": {
+      "type": "string"
+    },
+    "agent": {
+      "type": "string"
+    },
+    "provider": {
+      "const": "github-copilot-cli"
+    },
+    "schema_version": {
+      "type": "string"
+    },
     "status": {
-      "enum": ["completed", "inconclusive", "blocked", "failed"]
+      "enum": [
+        "completed",
+        "inconclusive",
+        "blocked",
+        "failed"
+      ]
     },
     "decision": {
-      "enum": ["APPROVE", "APPROVE_WITH_NOTES", "CHANGES_REQUIRED", "BLOCKED", "INCONCLUSIVE"]
+      "enum": [
+        "APPROVE",
+        "APPROVE_WITH_NOTES",
+        "CHANGES_REQUIRED",
+        "BLOCKED",
+        "INCONCLUSIVE"
+      ]
     },
     "findings": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["severity", "message"],
+        "required": [
+          "severity",
+          "message"
+        ],
         "properties": {
-          "severity": { "enum": ["Critical", "Major", "Minor", "Info"] },
-          "message": { "type": "string" },
-          "file": { "type": ["string", "null"] },
-          "line": { "type": ["integer", "null"] },
-          "category": { "type": ["string", "null"] },
-          "range": { "type": ["string", "null"] },
-          "line_range": { "type": ["string", "null"] },
-          "rationale": { "type": ["string", "null"] },
-          "recommendation": { "type": ["string", "null"] },
-          "confidence": { "type": ["string", "null"] },
+          "severity": {
+            "enum": [
+              "Critical",
+              "Major",
+              "Minor",
+              "Info"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "range": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "line_range": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rationale": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "recommendation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "confidence": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "reported_by": {
-            "type": ["array", "null"],
-            "items": { "type": "string" }
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
           },
           "reported_severities": {
-            "type": ["array", "null"],
-            "items": { "enum": ["Critical", "Major", "Minor", "Info"] }
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "enum": [
+                "Critical",
+                "Major",
+                "Minor",
+                "Info"
+              ]
+            }
           },
-          "severity_conflict": { "type": ["boolean", "null"] }
+          "severity_conflict": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
         }
       }
     },
-    "summary": { "type": "string" },
+    "summary": {
+      "type": "string"
+    },
     "reviewer_states": {
-      "type": ["object", "null"],
-      "additionalProperties": { "type": "string" }
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "type": "string"
+      }
     },
     "conflicts": {
-      "type": ["array", "null"],
-      "items": { "type": "object" }
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "object"
+      }
     },
-    "incomplete_review": { "type": ["boolean", "null"] }
+    "incomplete_review": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "human_checks": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "object"
+      }
+    },
+    "challenge_decisions": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "object"
+      }
+    },
+    "excluded_findings": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "object"
+      }
+    },
+    "review_coverage": {
+      "type": [
+        "object",
+        "null"
+      ]
+    }
   }
 }
