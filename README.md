@@ -98,7 +98,7 @@ python -m ai_review review --repo <path> --target base
 
 Default review execution mode is `subagent`: Python prepares safe context and
 invokes the Copilot Review Orchestrator once. The previous Python-driven
-9-agent serial runner is deprecated and available only with
+11-agent serial runner is deprecated and available only with
 `--execution-mode legacy`; `--agent` is legacy-only.
 
 ### Copilot Chat Custom Agent
@@ -118,17 +118,19 @@ VS Code
 
 ## エージェント
 
-1つのGitHub Copilot CLIを、次の9種類の論理エージェントとして完全に直列実行します。最大同時Copilot呼び出し数は1です。
+legacy実行では、1つのGitHub Copilot CLIを次の11種類の論理エージェントとして実行します。標準経路はCustom Agent/Subagentです。
 
 1. requirements
 2. correctness
-3. security
-4. testing
-5. maintainability
-6. performance
-7. operations
-8. devil_advocate
-9. final
+3. design_conformance
+4. project_rules
+5. security
+6. testing
+7. maintainability
+8. performance
+9. operations
+10. devil_advocate
+11. final
 
 ## 安全制約
 
@@ -254,3 +256,15 @@ Issue #6 status: legacy and superseded by #23-#29 for the standard path. It was 
 一次レビュー完了後、`Devil Advocate`が誤検出・過剰断定・根拠不足を反証し、その後`Final Reviewer`が総合整理します。利用者向けの成果物名・判定指標は可能な限り日本語で表記します。
 
 詳細: `docs/project-aware-review.md`
+
+
+### 実行時プロジェクト文脈
+
+標準Review Controllerは、対象リポジトリから次を読み取り専用で収集してOrchestratorへ渡します。
+
+- 要件文書
+- Excel（.xlsx）を含む設計情報
+- プロジェクト固有ルール
+- 抽出時の警告・制限
+
+Excelはopenpyxlで構造化し、ファイル名・シート名・セル座標をprovenanceとして保持します。.xls / PDFは自動で内容を補完せず、未対応形式として警告します。
