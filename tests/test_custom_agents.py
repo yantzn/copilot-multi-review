@@ -170,10 +170,17 @@ def test_specialist_reviewers_document_independent_evaluation() -> None:
     by_file = {definition.path.name: definition for definition in definitions}
 
     for file_name in SPECIALIST_REVIEWERS:
+        if file_name == "devil-advocate.agent.md":
+            continue
         instructions = by_file[file_name].instructions.lower()
         assert "do not use other reviewer results before review" in instructions
         assert "previous reviewer conclusions" in instructions
         assert "independently evaluate the same diff/context" in instructions
+
+    devil = by_file["devil-advocate.agent.md"].instructions
+    assert "primary_reviewer_results" in devil
+    assert "維持候補" in devil
+    assert "根拠不足による棄却候補" in devil
 
 
 def test_final_reviewer_documents_input_contract() -> None:
