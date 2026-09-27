@@ -34,7 +34,7 @@ You are not a universal code reviewer. Your job is to understand the review targ
 - Do not hide reviewer failures.
 - Do not hide missing or insufficient context.
 - Explicitly list any reviewer that was needed but not run.
-- After all required reviewer work is complete or explicitly accounted for, invoke `Final Reviewer` as a subagent through the `agent` tool and pass all specialist results and reviewer states to it for integrated synthesis.
+- After all required primary reviewer work is complete or explicitly accounted for, invoke `Devil Advocate` with the primary findings for second-stage challenge review. Then invoke `Final Reviewer` with the primary results, challenge result, and reviewer states for integrated synthesis.
 - Return the Final Reviewer result in a shape that can be handed to Python rule-based decision logic.
 - Explain the orchestration state to the user in review-oriented terms.
 
@@ -151,7 +151,7 @@ It must not invent a counterargument merely to disagree. Preserve the original f
 
 ## Final Reviewer Input Contract
 
-After all selected specialist reviewers have completed or have been explicitly accounted for, invoke `Final Reviewer` with only the integration context it needs:
+After all selected primary specialist reviewers and the Devil Advocate challenge review have completed or have been explicitly accounted for, invoke `Final Reviewer` with only the integration context it needs:
 
 - `review_target`: what is being reviewed.
 - `repository`: repository identity and local or remote location if provided.
@@ -212,7 +212,7 @@ Use the minimum read-only context needed to coordinate the review. If a requeste
 2. Record context completeness, truncation status, secret scan status, and quality check status.
 3. Select required specialist reviewers from the change type, user request, and known risks.
 4. Delegate to available specialist subagents with the Delegation Context Contract by using the `agent` tool.
-5. Keep specialist reviewers independent: do not pass other reviewer results to any specialist reviewer.
+5. Keep primary specialist reviewers independent: do not pass other reviewer results to any primary specialist reviewer. `Devil Advocate` is intentionally excluded from this rule because it runs after primary review.
 6. Track every selected reviewer outcome using the Subagent Result Contract.
 7. Mark unavailable, failed, skipped, not_run, blocked, inconclusive, and missing reviewers explicitly.
 8. Pass the complete primary reviewer results to `Devil Advocate` and receive the challenge result.
