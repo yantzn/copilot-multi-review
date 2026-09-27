@@ -44,7 +44,11 @@ def collect_project_context(root: Path) -> dict[str, object]:
     design_items: list[dict[str, object]] = []
     warnings: list[str] = []
     for path in _unique_paths(
-        [root / "design", root / "docs"],
+        [
+            root / "design",
+            root / "docs" / "design",
+            root / "docs" / "architecture.md",
+        ],
         suffixes={".xlsx", ".csv", ".md", ".txt", ".pdf", ".xls"},
     ):
         suffix = path.suffix.lower()
