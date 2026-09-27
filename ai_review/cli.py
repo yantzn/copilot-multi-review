@@ -56,6 +56,8 @@ def build_parser() -> argparse.ArgumentParser:
     review.add_argument("--agent", choices=[
         "requirements",
         "correctness",
+        "design_conformance",
+        "project_rules",
         "security",
         "testing",
         "maintainability",
