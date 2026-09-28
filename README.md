@@ -84,7 +84,7 @@ Custom Agentの正本は `.github/agents` です。セットアップCLIは管�
 
 ## Antigravity integration
 
-Google Antigravity 2.0 / Antigravity IDE / Antigravity CLI向けには、Global Plugin + Global MCPとしてインストールします。
+Google Antigravity IDE / Antigravity 2.0向けには、Global Plugin + Global MCPとしてインストールします。
 
 初回:
 
