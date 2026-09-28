@@ -8,6 +8,8 @@ from pathlib import Path
 import shutil
 import sys
 
+import yaml
+
 
 PLUGIN_NAME = "copilot-multi-review"
 MCP_SERVER_ID = "copilotMultiReview"
@@ -228,20 +230,23 @@ def _sync_antigravity(*, require_managed: bool) -> dict[str, object]:
 
 
 def _validate_source_plugin(path: Path) -> None:
+    agent_names = [
+        "review-orchestrator",
+        "requirements-reviewer",
+        "correctness-reviewer",
+        "design-conformance-reviewer",
+        "project-rules-reviewer",
+        "security-reviewer",
+        "testing-reviewer",
+        "maintainability-reviewer",
+        "performance-reviewer",
+        "operations-reviewer",
+        "devil-advocate",
+        "final-reviewer",
+    ]
     required = [
         path / "plugin.json",
-        path / "agents" / "review-orchestrator.md",
-        path / "agents" / "requirements-reviewer.md",
-        path / "agents" / "correctness-reviewer.md",
-        path / "agents" / "design-conformance-reviewer.md",
-        path / "agents" / "project-rules-reviewer.md",
-        path / "agents" / "security-reviewer.md",
-        path / "agents" / "testing-reviewer.md",
-        path / "agents" / "maintainability-reviewer.md",
-        path / "agents" / "performance-reviewer.md",
-        path / "agents" / "operations-reviewer.md",
-        path / "agents" / "devil-advocate.md",
-        path / "agents" / "final-reviewer.md",
+        *(path / "agents" / f"{name}.md" for name in agent_names),
         path / "skills" / "review" / "SKILL.md",
     ]
     missing = [str(item.relative_to(path)) for item in required if not item.is_file()]
@@ -249,6 +254,92 @@ def _validate_source_plugin(path: Path) -> None:
         raise AntigravityIntegrationError(
             "Antigravity Pluginテンプレートが不足しています: " + ", ".join(missing)
         )
+
+    try:
+        plugin = json.loads((path / "plugin.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise AntigravityIntegrationError("Antigravity plugin.jsonが不正です。") from exc
+    if not isinstance(plugin, dict) or plugin.get("name") != PLUGIN_NAME:
+        raise AntigravityIntegrationError(
+            f"Antigravity plugin.jsonのnameは {PLUGIN_NAME!r} である必要があります。"
+        )
+
+    for name in agent_names:
+        metadata = _frontmatter(path / "agents" / f"{name}.md")
+        if metadata.get("name") != name:
+            raise AntigravityIntegrationError(
+                f"Antigravity Agent nameが不正です: {name}"
+            )
+        if not isinstance(metadata.get("description"), str):
+            raise AntigravityIntegrationError(
+                f"Antigravity Agent descriptionがありません: {name}"
+            )
+        if metadata.get("subagent") is not True:
+            raise AntigravityIntegrationError(
+                f"Antigravity Agentはsubagent: trueが必要です: {name}"
+            )
+        tools = metadata.get("tools", [])
+        if not isinstance(tools, list) or not all(isinstance(item, str) for item in tools):
+            raise AntigravityIntegrationError(
+                f"Antigravity Agent toolsが不正です: {name}"
+            )
+        if name == "review-orchestrator":
+            if metadata.get("mainAgent") is not True:
+                raise AntigravityIntegrationError(
+                    "review-orchestratorはmainAgent: trueが必要です。"
+                )
+            if metadata.get("inheritMcp") is not True:
+                raise AntigravityIntegrationError(
+                    "review-orchestratorはinheritMcp: trueが必要です。"
+                )
+            if "invoke_subagent" not in tools:
+                raise AntigravityIntegrationError(
+                    "review-orchestratorはinvoke_subagent toolが必要です。"
+                )
+        else:
+            if metadata.get("mainAgent") is not False:
+                raise AntigravityIntegrationError(
+                    f"専門ReviewerはmainAgent: falseが必要です: {name}"
+                )
+            if any(
+                item in {"replace_file_content", "run_command", "invoke_subagent"}
+                for item in tools
+            ):
+                raise AntigravityIntegrationError(
+                    f"専門Reviewerに変更・委譲toolは許可しません: {name}"
+                )
+
+    skill = _frontmatter(path / "skills" / "review" / "SKILL.md")
+    if skill.get("name") != "review" or not isinstance(skill.get("description"), str):
+        raise AntigravityIntegrationError("Antigravity review Skillのfrontmatterが不正です。")
+
+
+def _frontmatter(path: Path) -> dict[str, object]:
+    text = path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        raise AntigravityIntegrationError(f"YAML frontmatterがありません: {path}")
+    try:
+        end = next(
+            index
+            for index, line in enumerate(lines[1:], start=1)
+            if line.strip() == "---"
+        )
+    except StopIteration as exc:
+        raise AntigravityIntegrationError(
+            f"YAML frontmatterが閉じられていません: {path}"
+        ) from exc
+    try:
+        value = yaml.safe_load("\n".join(lines[1:end]))
+    except yaml.YAMLError as exc:
+        raise AntigravityIntegrationError(
+            f"YAML frontmatterが不正です: {path}"
+        ) from exc
+    if not isinstance(value, dict):
+        raise AntigravityIntegrationError(
+            f"YAML frontmatterはmappingである必要があります: {path}"
+        )
+    return value
 
 
 def _tree_digest(root: Path) -> str:
