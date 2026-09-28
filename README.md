@@ -96,10 +96,10 @@ headless環境ではCLIを使います。
 python -m ai_review review --repo <path> --target base
 ```
 
-Default review execution mode is `subagent`: Python prepares safe context and
-invokes the Copilot Review Orchestrator once. The previous Python-driven
-11-agent serial runner is deprecated and available only with
-`--execution-mode legacy`; `--agent` is legacy-only.
+標準のレビュー実行モードは `subagent` です。Pythonが安全なcontextを準備し、
+Copilot Review Orchestratorを1回呼び出します。従来のPython主導による
+11 Agent直列実行は非推奨で、`--execution-mode legacy` の場合だけ利用できます。
+`--agent` もlegacy実行専用です。
 
 ### Copilot Chat Custom Agent
 
