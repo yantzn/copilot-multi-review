@@ -75,7 +75,8 @@ def source_agents_dir() -> Path:
         return source
 
     checkout = checkout_agents_dir()
-    if _contains_all_agents(checkout):
+    if checkout.is_dir():
+        _validate_source_dir(checkout)
         return checkout
 
     packaged = packaged_agents_dir()
