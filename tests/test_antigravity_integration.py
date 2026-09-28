@@ -207,3 +207,32 @@ def test_uninstall_antigravity_removes_only_managed_assets(
     saved = json.loads(mcp_config_path().read_text(encoding="utf-8"))
     assert MCP_SERVER_ID not in saved["mcpServers"]
     assert saved["mcpServers"]["otherServer"] == {"command": "other"}
+
+
+def test_antigravity_review_contract_matches_core_vocabulary() -> None:
+    plugin = source_plugin_dir()
+    orchestrator = (plugin / "agents" / "review-orchestrator.md").read_text(encoding="utf-8")
+    final = (plugin / "agents" / "final-reviewer.md").read_text(encoding="utf-8")
+
+    for term in [
+        "prepare_review",
+        "finalize_review",
+        "Critical",
+        "Major",
+        "Minor",
+        "Info",
+        "reviewer_states",
+        "human_checks",
+        "excluded_findings",
+        "review_coverage",
+    ]:
+        assert term in orchestrator or term in final
+
+    for decision in [
+        "APPROVE",
+        "APPROVE_WITH_NOTES",
+        "CHANGES_REQUIRED",
+        "BLOCKED",
+        "INCONCLUSIVE",
+    ]:
+        assert decision in final
