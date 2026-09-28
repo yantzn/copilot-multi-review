@@ -1,3 +1,5 @@
 {
-  "name": "copilot-multi-review"
+  "$schema": "https://antigravity.google/schemas/v1/plugin.json",
+  "name": "copilot-multi-review",
+  "description": "Project-aware multi-agent code review with deterministic Python MCP safety checks."
 }
