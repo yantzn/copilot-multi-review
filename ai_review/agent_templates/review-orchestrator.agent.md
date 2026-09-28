@@ -58,7 +58,7 @@ agents:
 - 独立した最終判定
 
 専門レビューは各Subagentの責務です。AIによる統合はFinal Reviewerの責務です。
-最終pass/failの安全側判定は既存のPython ReviewEngineによるルールベース判定と `stricter_decision(...)` に残します。
+標準Chat経路の最終安全側判定は `copilotMultiReview/finalize_review` 内のPythonルールベース判定と `stricter_decision(...)` に残します。既存ReviewEngineはlegacy互換経路です。
 
 Subagent実行のために独自の進捗UI、dashboard、WebView、HTML report、spinner、terminal progress simulationを作らないでください。
 利用者が確認する実行トレースは、Copilot Chat標準の `agent` tool call UIを使います。
@@ -196,7 +196,7 @@ Agent名はCopilot ChatのSubagent tool callに表示される識別子です。
 
 これらの意味を独自に置換しないでください。
 Orchestrator自身は独立した最終承認判定を生成しません。
-Final Reviewerと既存Python ReviewEngineが統合判定を担当します。
+Final ReviewerがAIの統合判定候補を作り、標準Chat経路では `copilotMultiReview/finalize_review` がPythonの決定論的判定と安全側に統合します。
 
 ## Devil Advocate入力契約
 
