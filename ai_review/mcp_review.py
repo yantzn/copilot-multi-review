@@ -163,6 +163,7 @@ def finalize_review_context(
     quality_failed = any(item.status == "failed" for item in prepared.quality_checks)
     incomplete = (
         result.status != "completed"
+        or result.incomplete_review is True
         or not states
         or any(state in INCOMPLETE_REVIEWER_STATES for state in states.values())
         or quality_failed
