@@ -30,7 +30,12 @@ where = ["."]
 include = ["ai_review*"]
 
 [tool.setuptools.package-data]
-ai_review = ["agent_templates/*.agent.md"]
+ai_review = [
+  "agent_templates/*.agent.md",
+  "antigravity_plugin/plugin.json",
+  "antigravity_plugin/agents/*.md",
+  "antigravity_plugin/skills/*/SKILL.md",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
