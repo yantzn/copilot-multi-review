@@ -247,11 +247,11 @@ def test_final_reviewer_documents_dedup_and_provenance_contract() -> None:
     final = next(item for item in definitions if item.name == "Final Reviewer")
     instructions = final.instructions.lower()
 
-    assert "merge duplicate findings" in instructions
-    assert "semantic similarity" in instructions
+    assert "重複指摘を統合" in final.instructions
+    assert "意味的な類似" in final.instructions
     assert "reported_by" in final.instructions
     assert "reported_severities" in final.instructions
-    assert "Critical and Major" in final.instructions
+    assert "Critical / Major" in final.instructions
 
 
 def test_final_reviewer_documents_severity_conflict_resolution() -> None:
@@ -260,7 +260,7 @@ def test_final_reviewer_documents_severity_conflict_resolution() -> None:
 
     assert "Critical > Major > Minor > Info" in final.instructions
     assert "severity_conflict: true" in final.instructions
-    assert "choose the highest severity" in final.instructions
+    assert "最も安全側の重大度" in final.instructions
 
 
 def test_final_reviewer_documents_conflicts_and_incomplete_review() -> None:
@@ -268,13 +268,13 @@ def test_final_reviewer_documents_conflicts_and_incomplete_review() -> None:
     final = next(item for item in definitions if item.name == "Final Reviewer")
     instructions = final.instructions.lower()
 
-    assert "do not hide clear contradictions" in instructions
+    assert "隠さず `conflicts` に残してください" in final.instructions
     assert "conflicts" in instructions
     assert "failed" in instructions
     assert "missing" in instructions
     assert "not_run" in instructions
     assert "incomplete_review" in instructions
-    assert "do not propose unconditional `approve`" in instructions
+    assert "無条件の `APPROVE` を提案してはいけません" in final.instructions
     assert "truncated" in instructions
     assert "INCONCLUSIVE" in final.instructions
 
@@ -285,7 +285,7 @@ def test_final_reviewer_uses_existing_decision_vocabulary() -> None:
 
     for decision in ["APPROVE", "APPROVE_WITH_NOTES", "CHANGES_REQUIRED", "BLOCKED", "INCONCLUSIVE"]:
         assert decision in final.instructions
-    assert "AI synthesis decision candidate" in final.instructions
+    assert "AIによる統合判定候補" in final.instructions
     assert "stricter_decision" in final.instructions
 
 
@@ -414,7 +414,7 @@ def test_architecture_documents_python_and_custom_agent_boundaries() -> None:
     assert "Review Orchestrator" in text
     assert "VS Code Copilot Chat" in text
     assert "Python Review Controller" in text
-    assert "AI output is untrusted input" in text
+    assert "AI出力は信頼済み入力として扱いません" in text
     assert "Copilot CLI" in text
     for reviewer in [
         "requirements",
