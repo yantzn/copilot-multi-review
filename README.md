@@ -168,13 +168,44 @@ runtime/
 
 `reports/`と`runtime/`はGit管理対象外です。
 
-## 結果判定
+## レビュー結果
 
-- `APPROVE`: 指摘なし
-- `APPROVE_WITH_NOTES`: MinorまたはInfoのみ
-- `CHANGES_REQUIRED`: Majorあり
-- `BLOCKED`: Criticalまたはブロッキングシークレットあり
-- `INCONCLUSIVE`: 情報不足、切り捨て、失敗、キャンセル、品質チェック失敗など
+正式なレビュー結果は `report.md` にMarkdownで出力します。内部のSchema・判定ロジックでは既存互換の英語enumを維持し、利用者向け表示だけを日本語へ変換します。
+
+重要度:
+
+| 内部値 | 利用者向け表示 |
+|---|---|
+| `Critical` | 致命的 |
+| `Major` | 重大 |
+| `Minor` | 軽微 |
+| `Info` | 情報 |
+
+観点も `correctness → 正当性`、`design_conformance → 設計整合性`、`security → セキュリティ` のように日本語表示します。
+
+`report.md` は次の順序で構成します。
+
+1. レビュー概要
+2. 総評
+3. 指摘一覧の表
+4. 指摘ごとの詳細
+5. 人間による確認事項
+6. 反証により除外した指摘
+7. Reviewer間の意見相違
+8. レビュー担当の実行状況
+9. レビュー実施範囲
+
+具体的な指摘は、根拠付きで特定できる場合に `file` と `line` / `range` を付け、日本語の `message`、`rationale`、`recommendation` を表示します。場所を特定できない事項は行番号を推測せず、必要に応じてHuman Checkとして分離します。
+
+### 結果判定
+
+- `APPROVE`: 承認可
+- `APPROVE_WITH_NOTES`: 注記あり
+- `CHANGES_REQUIRED`: 修正必要
+- `BLOCKED`: ブロック
+- `INCONCLUSIVE`: 判定不能
+
+機械判定値は英語のまま保持し、Markdownでは日本語ラベルと内部値を併記します。
 
 ## 検証
 
