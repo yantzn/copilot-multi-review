@@ -36,6 +36,7 @@ DECISION_LABELS = {
 STATUS_LABELS = {
     "pending": "待機",
     "running": "実行中",
+    "delegated": "委譲済み",
     "completed": "完了",
     "failed": "失敗",
     "blocked": "ブロック",
