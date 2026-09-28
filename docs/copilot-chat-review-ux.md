@@ -6,10 +6,11 @@ This repository uses VS Code GitHub Copilot Chat as the primary human-facing rev
 
 Use `Review Orchestrator` from the Copilot Chat agent picker.
 
-1. Open the repository to review in VS Code.
-2. Open GitHub Copilot Chat.
-3. Select `Review Orchestrator` in the agent picker.
-4. Send a review request, for example:
+1. User Custom Agentを `copilot-multi-review install` で初回インストールする。
+2. レビュー対象のリポジトリをVS Codeで開く。`copilot-multi-review` 自体を開く必要はない。
+3. GitHub Copilot Chatを開く。
+4. Agent pickerで `Review Orchestrator` を選択する。
+5. レビュー依頼を送信する。例:
 
 ```text
 Review the diff against main in this repository.
@@ -61,6 +62,26 @@ The user should be able to determine, through the standard UI:
 
 Do not rely on exact icon names, labels, or UI strings in code or tests. VS Code and Copilot may change the presentation across versions.
 
+## User Custom Agent Distribution
+
+通常利用では、このリポジトリの `.github/agents` を直接Workspace Agentとして使うのではなく、セットアップCLIでUser Agentへ同期します。
+
+```text
+copilot-multi-review/.github/agents
+        ↓ install / sync
+~/.copilot/agents/copilot-multi-review-*.agent.md
+        ↓
+任意のレビュー対象Repository
+        ↓
+Copilot Chat
+        ↓
+Review Orchestrator
+```
+
+インストール先ファイル名には衝突回避のため `copilot-multi-review-` prefixを付けます。Agent pickerやSubagent呼び出しで使うAgent名はfrontmatterの `name` を維持します。
+
+更新は `git pull` 後に `copilot-multi-review sync` を実行します。Python packageをeditable installしている場合、Pythonコードはcheckoutを直接参照しますが、User Agent定義はコピーされるためsyncが必要です。
+
 ## Agent Picker Visibility
 
 The intended normal picker entry is:
@@ -96,7 +117,8 @@ Confirmed documentation basis:
 
 Expected product capabilities:
 
-- Workspace custom agents are loaded from `.github/agents`.
+- Project-level custom agents are loaded from `.github/agents`.
+- User-level custom agents can be loaded globally from `~/.copilot/agents`; this repository installs its managed Agent files there for normal use across repositories.
 - `tools: ['agent']` or a tool list containing `agent` enables subagent invocation.
 - `agents:` restricts the set of custom agents available to the coordinator.
 - `user-invocable: false` hides an agent from the chat agent dropdown while allowing subagent or programmatic use.
