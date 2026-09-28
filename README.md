@@ -24,7 +24,9 @@ python -m pip install -U pip
 python -m pip install -e .[dev]
 ```
 
-GitHub Copilot CLIを導入し、認証してください。
+通常のCustom Agent運用では、VS CodeでGitHub Copilot Chat / Agent機能を利用できる状態にしてください。
+
+既存のlegacy CLI経路を使用する場合のみ、GitHub Copilot CLIの導入・認証と `ai-review validate-config` が必要です。
 
 ```bash
 copilot version
