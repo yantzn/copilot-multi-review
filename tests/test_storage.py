@@ -6,6 +6,7 @@ import subprocess
 
 import pytest
 
+from ai_review.agents import AgentResult, Finding
 from ai_review.diff_collector import collect_diff
 from ai_review.quality import QualityCheckResult
 from ai_review.repository import resolve_repository
@@ -118,6 +119,59 @@ def test_save_review_result_persists_strategy_and_timing(tmp_path: Path) -> None
     assert final_json["requested_execution_strategy"] == "native"
     assert final_json["incomplete_review"] is False
 
+
+
+def test_save_review_result_renders_japanese_finding_table(tmp_path: Path) -> None:
+    engine = tmp_path / "engine"
+    target = init_repo(tmp_path / "target")
+    paths = RootPaths.from_engine_root(engine)
+    repository = resolve_repository(str(target))
+    diff = collect_diff(repository, target="base")
+    final = AgentResult(
+        run_id="run-jp",
+        agent="final",
+        provider="github-copilot-cli",
+        schema_version="0.1.0",
+        decision="CHANGES_REQUIRED",
+        findings=[
+            Finding(
+                severity="Major",
+                category="testing",
+                file="tests/test_order.py",
+                line=52,
+                message="異常系のテストケースが不足しています。",
+                rationale="変更された例外経路を確認するテストがありません。",
+                recommendation="例外発生時のテストケースを追加してください。",
+            )
+        ],
+        summary="テスト観点で修正候補があります。",
+    )
+    result = EngineResult(
+        "run-jp",
+        "github-copilot-cli",
+        {"testing": "completed", "final": "completed"},
+        [final],
+        "CHANGES_REQUIRED",
+        1,
+    )
+
+    save_review_result(
+        paths,
+        repository,
+        run_id="run-jp",
+        target="base",
+        request={"target": "base"},
+        diff=diff,
+        quality_checks=[],
+        engine_result=result,
+        copilot_version=None,
+    )
+
+    report = latest_report(paths, repository.project_id)
+    assert "# コードレビュー結果" in report
+    assert "| F-001 | 重大 | テスト | `tests/test_order.py` | 52 |" in report
+    assert "**対象:** `tests/test_order.py:52`" in report
+    assert "異常系のテストケースが不足しています。" in report
 
 def test_lock_rejects_double_start_and_releases_own_generation(tmp_path: Path) -> None:
     target = init_repo(tmp_path / "target")

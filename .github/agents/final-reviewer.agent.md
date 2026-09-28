@@ -211,6 +211,19 @@ Python ReviewEngineが `rule_based_decision(...)` と `stricter_decision(...)` �
 - `recommendation`
 - `confidence`
 
+### 具体的な指摘位置
+
+コード上の具体的な問題として最終 `findings` に残す場合は、可能な限り `file` と `line` / `range` を付けてください。
+場所を特定できないのに行番号を推測してはいけません。コード位置を根拠付きで特定できず、人間の仕様判断や追加情報が必要な事項は、確定Findingへ無理に入れず `human_checks` または `missing_context` へ移してください。
+
+各Findingの利用者向け文章は、少なくとも次を読める状態にします。
+
+- `message`: 具体的に何を指摘しているか
+- `rationale`: どのコード・要件・設計・ルールを根拠に、なぜ問題になり得るか
+- `recommendation`: 何を確認または修正すればよいか
+
+設計整合性の指摘では、利用可能な場合、コード位置に加えて設計書ファイル・シート/節・セル範囲/ページ等のprovenanceを `rationale` に残してください。
+
 統合した指摘では、利用可能な場合に次も含めます。
 
 - `reported_by`
@@ -222,6 +235,9 @@ Critical / Majorでは、元レビュー担当、元の重大度、報告理由�
 ## 出力言語
 
 JSONキー、Agent名、status / decision / severity / categoryなどの機械可読な識別子・列挙値は変更しません。
+`severity` の内部値は `Critical / Major / Minor / Info` のまま保持します。利用者向けMarkdownではPython rendererがそれぞれ `致命的 / 重大 / 軽微 / 情報` として表示します。
+`category` も内部IDは変更せず、利用者向けMarkdownでは日本語の観点名へ変換します。
+
 一方、利用者向けの自然言語は日本語で記述してください。少なくとも次の自然言語部分は日本語にします。
 
 - `summary`

@@ -27,6 +27,24 @@ Review the changes corresponding to PR #123.
 
 The CLI remains available for headless and supplementary workflows. It is not the primary UI for observing subagent progress.
 
+## レビュー結果の出力
+
+Copilot Chatは進捗確認と短い結果確認に使い、正式なレビュー成果物はMarkdownの `report.md` として出力します。
+
+`report.md` では、内部の `Critical / Major / Minor / Info` をそのまま利用者へ見せず、`致命的 / 重大 / 軽微 / 情報` として表示します。観点も内部IDを維持したまま、利用者向けには日本語へ変換します。
+
+具体的なFindingは次を含むことを基本とします。
+
+- ファイル
+- 行番号または範囲
+- 日本語の指摘
+- 日本語の根拠
+- 日本語の推奨対応
+- AI確信度
+- 報告Reviewer
+
+一覧はMarkdown表で提示し、その後に各指摘の詳細を続けます。根拠付きでコード位置を特定できない事項は行番号を推測せず、Human Checkまたは不足情報として分離します。
+
 ## Standard Subagent UI
 
 No custom progress UI is implemented for Issue #28. The expected progress and result display is the standard VS Code / GitHub Copilot subagent UI for `agent` tool calls.
