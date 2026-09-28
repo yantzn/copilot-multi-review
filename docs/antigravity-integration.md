@@ -151,13 +151,13 @@ AntigravityのSubagentは親Conversationの既存履歴を継承しない独立c
 - 対象Repositoryへレビュー成果物を書き込まない
 - commit / push / merge / reset / checkout / clean / rebase / tagを行わない
 
-正式なMarkdownは既存MCP実装によりユーザー領域へ保存します。
+正式なMarkdownはAntigravity利用時、対象Repository外の次へ保存します。
 
 ```text
-~/.copilot/copilot-multi-review/reviews/<project-id>/review.md
+~/.gemini/config/copilot-multi-review/reviews/<project-id>/review.md
 ```
 
-この保存先はPython MCP側の既存互換を維持するため、Antigravity利用時も現時点では `~/.copilot/copilot-multi-review` を共有します。将来platform-neutralな保存先へ移行する場合は別Issueで扱います。
+AntigravityのMCP設定から `COPILOT_MULTI_REVIEW_OUTPUT_HOME` を渡して出力先を分離します。Copilot経路は既存の保存先を維持します。
 
 ## 更新
 
