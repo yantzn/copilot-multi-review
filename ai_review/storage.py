@@ -10,6 +10,7 @@ import shutil
 import uuid
 
 from .review_engine import EngineResult
+from .review_markdown import render_review_markdown
 from .repository import RepositoryContext
 
 
@@ -172,9 +173,24 @@ def save_review_result(
         "requested_execution_strategy": engine_result.requested_execution_strategy or engine_result.execution_strategy,
         "incomplete_review": any(state in {"failed", "cancelled", "pending"} for state in engine_result.agent_states.values()),
     }
+    final_result = next((result for result in reversed(engine_result.agent_results) if result.agent == "final"), None)
+    report_markdown = render_review_markdown(
+        project_id=repository.project_id,
+        target=target,
+        final_decision=engine_result.final_decision,
+        final_result=final_result,
+        changed_file_count=diff.changed_file_count,
+        diff_line_count=diff.diff_line_count,
+        truncated=diff.truncated,
+        reviewer_states=engine_result.agent_states,
+        run_id=run_id,
+        execution_mode=engine_result.execution_mode,
+        execution_strategy=engine_result.execution_strategy,
+    )
+
     (history_dir / "run.json").write_text(json.dumps(run_json, ensure_ascii=False, indent=2), encoding="utf-8")
     (history_dir / "final.json").write_text(json.dumps(final_json, ensure_ascii=False, indent=2), encoding="utf-8")
-    (history_dir / "report.md").write_text(_render_report(run_json, final_json), encoding="utf-8")
+    (history_dir / "report.md").write_text(report_markdown, encoding="utf-8")
     for result in engine_result.agent_results:
         (agents_dir / f"{result.agent}.json").write_text(json.dumps(asdict(result), ensure_ascii=False, indent=2), encoding="utf-8")
     if latest_dir.exists():
@@ -211,22 +227,3 @@ def cleanup_locks(paths: RootPaths, project_id: str, *, dry_run: bool = True) ->
         deleted.append(path.name)
     return {"status": "deleted" if deleted else "nothing_to_delete", "dry_run": False, "deleted": deleted}
 
-
-def _render_report(run_json: dict, final_json: dict) -> str:
-    return "\n".join(
-        [
-            f"# Review Report: {run_json['project_id']}",
-            "",
-            f"- run_id: {run_json['run_id']}",
-            f"- target: {run_json['target']}",
-            f"- decision: {final_json['decision']}",
-            f"- execution_mode: {final_json.get('execution_mode', 'unknown')}",
-            f"- requested_execution_strategy: {final_json.get('requested_execution_strategy', final_json.get('execution_strategy', 'native'))}",
-            f"- execution_strategy: {final_json.get('execution_strategy', 'native')}",
-            f"- changed files: {run_json['changed_file_count']}",
-            f"- diff lines: {run_json['diff_line_count']}",
-            f"- truncated: {run_json['truncated']}",
-            f"- duration_ms: {run_json.get('duration_ms')}",
-            "",
-        ]
-    )
