@@ -231,6 +231,41 @@ def test_finalize_review_respects_final_reviewer_incomplete_flag(
     assert result["incomplete_review"] is True
 
 
+
+def test_finalize_review_honors_platform_output_home(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("COPILOT_MULTI_REVIEW_HOME", str(tmp_path / "copilot-home"))
+    output_home = tmp_path / "antigravity-output"
+    monkeypatch.setenv("COPILOT_MULTI_REVIEW_OUTPUT_HOME", str(output_home))
+    repo = init_repo(tmp_path / "repo")
+    (repo / "app.py").write_text("def value():\n    return 2\n", encoding="utf-8")
+
+    prepared = prepare_review_context(str(repo), target="uncommitted", run_quality=False)
+    context_id = prepared["review_context_id"]
+    assert isinstance(context_id, str)
+
+    result = finalize_review_context(
+        context_id,
+        {
+            "agent": "final",
+            "status": "completed",
+            "decision": "APPROVE",
+            "findings": [],
+            "summary": "指摘はありません。",
+            "reviewer_states": {
+                "correctness": "completed",
+                "final": "completed",
+            },
+        },
+    )
+
+    report = Path(str(result["report_path"]))
+    assert output_home in report.parents
+    assert repo not in report.parents
+
+
 def test_finalize_review_rejects_invalid_severity(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

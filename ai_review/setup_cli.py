@@ -16,6 +16,13 @@ from .mcp_config import (
     sync_mcp_config,
     uninstall_mcp_config,
 )
+from .antigravity_integration import (
+    AntigravityIntegrationError,
+    install_antigravity,
+    status_antigravity,
+    sync_antigravity,
+    uninstall_antigravity,
+)
 
 
 STATUS_LABELS = {
@@ -29,22 +36,35 @@ STATUS_LABELS = {
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="copilot-multi-review",
-        description="copilot-multi-review のUser Custom AgentとMCP server設定を管理します。",
+        description="copilot-multi-review のCopilot / Antigravity integrationを管理します。",
     )
     subparsers = parser.add_subparsers(dest="command")
 
-    install = subparsers.add_parser("install", help="User Custom AgentとMCP serverを初回インストールします")
+    install = subparsers.add_parser("install", help="レビューintegrationを初回インストールします")
+    _add_platform_argument(install)
     install.set_defaults(func=_handle_install)
 
-    sync = subparsers.add_parser("sync", help="User Custom AgentとMCP server設定を同期します")
+    sync = subparsers.add_parser("sync", help="レビューintegrationを正本と同期します")
+    _add_platform_argument(sync)
     sync.set_defaults(func=_handle_sync)
 
-    status = subparsers.add_parser("status", help="User Custom AgentとMCP serverの状態を表示します")
+    status = subparsers.add_parser("status", help="レビューintegrationの状態を表示します")
+    _add_platform_argument(status)
     status.set_defaults(func=_handle_status)
 
-    uninstall = subparsers.add_parser("uninstall", help="本ツール管理下のUser Custom AgentとMCP server設定を削除します")
+    uninstall = subparsers.add_parser("uninstall", help="本ツール管理下のレビューintegrationを削除します")
+    _add_platform_argument(uninstall)
     uninstall.set_defaults(func=_handle_uninstall)
     return parser
+
+
+def _add_platform_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--platform",
+        choices=["copilot", "antigravity", "all"],
+        default="copilot",
+        help="対象platform。未指定時は既存互換のcopilot。",
+    )
 
 
 def _print_sync_result(action: str, result: dict[str, object]) -> None:
@@ -66,45 +86,75 @@ def _print_mcp_result(action: str, result: dict[str, object]) -> None:
         print(f"Action: {result['action']}")
 
 
-def _handle_install(_args: argparse.Namespace) -> int:
-    _print_sync_result("Custom Agentをインストール", install_agents())
-    _print_mcp_result("インストール", install_mcp_config())
+def _handle_install(args: argparse.Namespace) -> int:
+    if args.platform in {"copilot", "all"}:
+        _print_sync_result("Copilot Custom Agentをインストール", install_agents())
+        _print_mcp_result("インストール", install_mcp_config())
+    if args.platform in {"antigravity", "all"}:
+        _print_antigravity_result("インストール", install_antigravity())
     return 0
 
 
-def _handle_sync(_args: argparse.Namespace) -> int:
-    _print_sync_result("Custom Agentを同期", sync_agents())
-    _print_mcp_result("同期", sync_mcp_config())
+def _handle_sync(args: argparse.Namespace) -> int:
+    if args.platform in {"copilot", "all"}:
+        _print_sync_result("Copilot Custom Agentを同期", sync_agents())
+        _print_mcp_result("同期", sync_mcp_config())
+    if args.platform in {"antigravity", "all"}:
+        _print_antigravity_result("同期", sync_antigravity())
     return 0
 
 
-def _handle_status(_args: argparse.Namespace) -> int:
-    statuses = status_agents()
-    print("Custom Agent status:")
-    for item in statuses:
-        label = STATUS_LABELS.get(item.status, item.status)
-        print(f"- {item.installed_name}: {label}")
-    current = sum(1 for item in statuses if item.status == "current")
-    print(f"Current: {current}/{len(statuses)}")
+def _handle_status(args: argparse.Namespace) -> int:
+    if args.platform in {"copilot", "all"}:
+        statuses = status_agents()
+        print("Copilot Custom Agent status:")
+        for item in statuses:
+            label = STATUS_LABELS.get(item.status, item.status)
+            print(f"- {item.installed_name}: {label}")
+        current = sum(1 for item in statuses if item.status == "current")
+        print(f"Current: {current}/{len(statuses)}")
 
-    mcp_status = status_mcp_config()
-    mcp_label = STATUS_LABELS.get(mcp_status.status, mcp_status.status)
-    print("MCP status:")
-    print(f"- {mcp_status.server_id}: {mcp_label}")
-    print(f"- config: {mcp_status.config_path}")
+        mcp_status = status_mcp_config()
+        mcp_label = STATUS_LABELS.get(mcp_status.status, mcp_status.status)
+        print("Copilot MCP status:")
+        print(f"- {mcp_status.server_id}: {mcp_label}")
+        print(f"- config: {mcp_status.config_path}")
+
+    if args.platform in {"antigravity", "all"}:
+        antigravity = status_antigravity()
+        print("Antigravity status:")
+        print(f"- plugin: {STATUS_LABELS.get(antigravity.plugin_status, antigravity.plugin_status)}")
+        print(f"- MCP: {STATUS_LABELS.get(antigravity.mcp_status, antigravity.mcp_status)}")
+        print(f"- plugin_dir: {antigravity.plugin_dir}")
+        print(f"- mcp_config: {antigravity.mcp_config_path}")
     return 0
 
 
-def _handle_uninstall(_args: argparse.Namespace) -> int:
-    mcp_result = uninstall_mcp_config()
-    result = uninstall_agents()
-    print("本ツール管理下のCustom Agentを削除しました。")
-    print(f"Destination: {result['agents_dir']}")
-    print(f"Removed: {result['total']}")
-    print("本ツール管理下のMCP server設定を削除しました。")
-    print(f"Server: {mcp_result['server_id']}")
-    print(f"Removed: {mcp_result['removed']}")
+def _handle_uninstall(args: argparse.Namespace) -> int:
+    if args.platform in {"copilot", "all"}:
+        mcp_result = uninstall_mcp_config()
+        result = uninstall_agents()
+        print("本ツール管理下のCopilot Custom Agentを削除しました。")
+        print(f"Destination: {result['agents_dir']}")
+        print(f"Removed: {result['total']}")
+        print("本ツール管理下のCopilot MCP server設定を削除しました。")
+        print(f"Server: {mcp_result['server_id']}")
+        print(f"Removed: {mcp_result['removed']}")
+
+    if args.platform in {"antigravity", "all"}:
+        result = uninstall_antigravity()
+        print("本ツール管理下のAntigravity integrationを削除しました。")
+        print(f"Plugin removed: {result['plugin_removed']}")
+        print(f"MCP removed: {result['mcp_removed']}")
     return 0
+
+
+def _print_antigravity_result(action: str, result: dict[str, object]) -> None:
+    print(f"Antigravity integrationを{action}しました。")
+    print(f"Plugin: {result['plugin_dir']}")
+    print(f"Plugin action: {result['plugin_action']}")
+    print(f"MCP config: {result['mcp_config_path']}")
+    print(f"MCP action: {result['mcp_action']}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -115,7 +165,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     try:
         return int(args.func(args))
-    except (CustomAgentInstallError, McpConfigError) as exc:
+    except (CustomAgentInstallError, McpConfigError, AntigravityIntegrationError) as exc:
         print(f"エラー: {exc}")
         return 2
 

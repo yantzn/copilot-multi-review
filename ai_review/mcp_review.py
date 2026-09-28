@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from dataclasses import asdict, dataclass
 from pathlib import Path
+import os
 from typing import Any
 import uuid
 
@@ -395,12 +396,20 @@ def _optional_dict_list(value: object, field: str) -> list[dict[str, object]] | 
     return [dict(item) for item in value]
 
 
+
+def _review_output_root() -> Path:
+    override = os.environ.get("COPILOT_MULTI_REVIEW_OUTPUT_HOME")
+    if override:
+        return Path(override).expanduser().resolve()
+    return metadata_dir()
+
+
 def _write_report(
     prepared: PreparedReview,
     result: AgentResult,
     final_decision: str,
 ) -> Path:
-    project_dir = metadata_dir() / "reviews" / prepared.repository.project_id
+    project_dir = _review_output_root() / "reviews" / prepared.repository.project_id
     project_dir.mkdir(parents=True, exist_ok=True)
     path = project_dir / "review.md"
     markdown = render_review_markdown(

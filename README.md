@@ -1,6 +1,6 @@
 # copilot-multi-review
 
-VS Code GitHub Copilot ChatのCustom Agentを中心に、複数の専門Reviewerでコードレビューを行う基盤です。既存のPython Review Controller / CLIは移行期間中の互換経路として残しています。
+VS Code GitHub Copilot ChatまたはGoogle AntigravityのCustom Agent/Subagentを入口に、複数の専門Reviewerでコードレビューを行う基盤です。Python MCPの決定論的処理は両platformで共通利用します。既存のPython Review Controller / CLIは移行期間中の互換経路として残しています。
 
 レビューエンジン、プロンプト、Schema、runtime、レポートはこの専用リポジトリへ集約します。レビュー対象の外部Gitリポジトリには、レビュー用コード、設定、レポート、runtimeを作成しません。
 
@@ -81,6 +81,58 @@ copilot-multi-review uninstall
 Custom Agentの正本は `.github/agents` です。セットアップCLIは管理対象Agentだけをユーザー共通領域へ同期し、他のUser Agentは変更しません。あわせてUser MCP config `~/.copilot/mcp-config.json` に `copilotMultiReview` を登録し、既存の他MCP server設定は保持します。
 
 詳細は `docs/custom-agent-installation.md` を参照してください。
+
+## Antigravity integration
+
+Google Antigravity IDE / Antigravity 2.0向けには、Global Plugin + Global MCPとしてインストールします。
+
+初回:
+
+```bash
+python -m pip install -e .
+copilot-multi-review install --platform antigravity
+```
+
+更新:
+
+```bash
+git pull
+python -m pip install -e .
+copilot-multi-review sync --platform antigravity
+```
+
+状態確認:
+
+```bash
+copilot-multi-review status --platform antigravity
+```
+
+削除:
+
+```bash
+copilot-multi-review uninstall --platform antigravity
+```
+
+インストール先:
+
+```text
+~/.gemini/config/plugins/copilot-multi-review/
+~/.gemini/config/mcp_config.json
+```
+
+通常利用は、レビュー対象RepositoryをAntigravityで開き、Custom Agentの `review-orchestrator` を選択して「mainとの差分をレビューして」と依頼します。Plugin同梱の `review` Skillも利用でき、Skillがslash commandとして公開される環境では `/review` から起動できます。
+
+Antigravityでは一次Reviewerを `invoke_subagent` で独立contextのCustom Subagentとして起動し、Devil Advocate、Final Reviewer、Python MCPの `finalize_review` まで接続します。対象Repositoryへintegrationファイルやレビュー成果物は書き込みません。
+
+CopilotとAntigravityを両方セットアップする場合:
+
+```bash
+copilot-multi-review install --platform all
+copilot-multi-review sync --platform all
+copilot-multi-review status --platform all
+```
+
+詳細は `docs/antigravity-integration.md` を参照してください。
 
 ## CLI
 
