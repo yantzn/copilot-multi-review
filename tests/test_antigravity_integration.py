@@ -118,6 +118,9 @@ def test_install_antigravity_copies_plugin_and_preserves_other_mcp_servers(
     server = saved["mcpServers"][MCP_SERVER_ID]
     assert server["args"] == ["-m", "ai_review.mcp_server"]
     assert server["cwd"] == "${workspaceFolder}"
+    assert server["env"]["COPILOT_MULTI_REVIEW_OUTPUT_HOME"] == str(
+        home / "copilot-multi-review"
+    )
 
     status = status_antigravity()
     assert status.plugin_status == "current"
