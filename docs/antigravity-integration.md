@@ -2,7 +2,7 @@
 
 ## 目的
 
-`copilot-multi-review` のレビュー設計を、GitHub Copilotの使用制限に依存せずGoogle Antigravity 2.0 / Antigravity IDE / Antigravity CLIから利用できるようにします。
+`copilot-multi-review` のレビュー設計を、GitHub Copilotの使用制限に依存せずGoogle Antigravity IDE / Antigravity 2.0から利用できるようにします。
 
 Python側の次の処理はCopilotと共通です。
 
@@ -20,6 +20,8 @@ Python側の次の処理はCopilotと共通です。
   - 日本語Markdown生成
 
 AI側だけをAntigravityのCustom Agent / Subagentへ適応します。
+
+このintegrationはAntigravity IDE / Antigravity 2.0のGlobal Plugin / Custom Agent / MCP構成を対象にします。Antigravity CLI固有のplugin manager経路はこの変更ではruntime検証対象にしません。
 
 ## Antigravity公式機能との対応
 
