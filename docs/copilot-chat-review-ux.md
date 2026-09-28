@@ -21,9 +21,9 @@ or:
 Review the changes corresponding to PR #123.
 ```
 
-5. The Orchestrator uses the `agent` tool to invoke specialist reviewers as subagents.
-6. Expand the standard Copilot Chat subagent tool calls to inspect the invoked reviewer name, prompt/context, tool usage when exposed by Copilot, and returned result.
-7. Confirm that `Devil Advocate` ran after the primary reviewers and challenged their findings. Then confirm that `Final Reviewer` integrated both primary and challenge results.
+5. Orchestratorが `agent` toolを使って、専門ReviewerをSubagentとして呼び出すことを確認します。
+6. Copilot Chat標準のSubagent tool callを展開し、利用可能な範囲でReviewer名、prompt/context、tool usage、戻り値を確認します。
+7. 一次Reviewerの後に `Devil Advocate` が実行され、一次指摘を反証していることを確認します。その後、`Final Reviewer` が一次結果と反証結果の両方を統合していることを確認します。
 
 The CLI remains available for headless and supplementary workflows. It is not the primary UI for observing subagent progress.
 
