@@ -29,20 +29,20 @@ STATUS_LABELS = {
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="copilot-multi-review",
-        description="copilot-multi-review のUser Custom Agentを管理します。",
+        description="copilot-multi-review のUser Custom AgentとMCP server設定を管理します。",
     )
     subparsers = parser.add_subparsers(dest="command")
 
-    install = subparsers.add_parser("install", help="User Custom Agentを初回インストールします")
+    install = subparsers.add_parser("install", help="User Custom AgentとMCP serverを初回インストールします")
     install.set_defaults(func=_handle_install)
 
-    sync = subparsers.add_parser("sync", help="User Custom Agentを正本と同期します")
+    sync = subparsers.add_parser("sync", help="User Custom AgentとMCP server設定を同期します")
     sync.set_defaults(func=_handle_sync)
 
-    status = subparsers.add_parser("status", help="User Custom Agentの同期状態を表示します")
+    status = subparsers.add_parser("status", help="User Custom AgentとMCP serverの状態を表示します")
     status.set_defaults(func=_handle_status)
 
-    uninstall = subparsers.add_parser("uninstall", help="本ツール管理下のUser Custom Agentを削除します")
+    uninstall = subparsers.add_parser("uninstall", help="本ツール管理下のUser Custom AgentとMCP server設定を削除します")
     uninstall.set_defaults(func=_handle_uninstall)
     return parser
 
