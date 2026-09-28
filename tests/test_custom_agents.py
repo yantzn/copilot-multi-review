@@ -29,6 +29,7 @@ def test_review_orchestrator_agent_definition_exists_and_is_valid() -> None:
     assert orchestrator.description
     assert orchestrator.metadata.get("user-invocable") is not False
     assert "agent" in orchestrator.tools
+    assert "copilotMultiReview/*" in orchestrator.tools
     assert set(orchestrator.agents) >= set(SPECIALIST_REVIEWERS.values())
     assert set(orchestrator.agents) >= set(FINAL_REVIEWER.values())
     assert "Review Orchestrator" in orchestrator.instructions
@@ -128,6 +129,10 @@ def test_orchestrator_delegates_to_all_specialist_reviewers() -> None:
     assert "`agent` toolを使い" in orchestrator.instructions
     assert "Copilot Chat標準のSubagent表示" in orchestrator.instructions
     assert "独自の進捗UI" in orchestrator.instructions
+    assert "copilotMultiReview/prepare_review" in orchestrator.instructions
+    assert "copilotMultiReview/finalize_review" in orchestrator.instructions
+    assert "finalize_review.decision" in orchestrator.instructions
+    assert "report_path" in orchestrator.instructions
 
 
 def test_orchestrator_agent_names_match_defined_leaf_agents_exactly() -> None:

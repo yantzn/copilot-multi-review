@@ -2,16 +2,39 @@
 
 ## Overview
 
-copilot-multi-reviewは、レビュー対象リポジトリから分離された専用レビューエンジンです。
+copilot-multi-reviewは、User Custom AgentとPython MCP Toolを組み合わせた、レビュー対象リポジトリから分離されたコードレビュー基盤です。
 
-- engine root: このリポジトリ
-- repository root: `--repo`で指定された外部Gitリポジトリ
-- output root: `reports/`
-- runtime root: `runtime/`
+標準の利用者入口はVS Code GitHub Copilot Chatの `Review Orchestrator` です。Custom Agent群は `~/.copilot/agents`、MCP serverは `~/.copilot/mcp-config.json` へUser単位で登録します。レビュー対象Repositoryにはcopilot-multi-review固有ファイルを追加しません。
 
-対象リポジトリへレビューコード、設定、runtime、レポートは作成しません。
+標準Chat経路の責務は次のように分離します。
 
-## Flow
+- Python MCP `prepare_review`: 事実収集、安全前処理、Project Context収集
+- Copilot Custom Agents: 意味判断、専門レビュー、反証、統合
+- Python MCP `finalize_review`: contract検証、決定論的安全側判定、日本語Markdown生成
+- Human: 指摘採否、修正方針、PR承認などの最終判断
+
+既存Python Review Controller / CLI / reports / runtimeはlegacy互換経路として残します。
+
+## Standard Chat Flow
+
+```mermaid
+flowchart TD
+  A["Target repository in VS Code"] --> B["Copilot Chat / Review Orchestrator"]
+  B --> C["MCP prepare_review"]
+  C --> D["Resolve repository + collect git diff"]
+  D --> E["Secret Scan + Project Context + Quality Check"]
+  E --> F{"confirmed secret?"}
+  F -->|yes| G["BLOCKED / diff is not sent to AI"]
+  F -->|no| H["Independent specialist reviewers"]
+  H --> I["Devil Advocate"]
+  I --> J["Final Reviewer"]
+  J --> K["MCP finalize_review"]
+  K --> L["Schema/contract validation + deterministic safer decision"]
+  L --> M["Japanese review.md outside target repository"]
+  M --> N["Chat summary + human final decision"]
+```
+
+## Legacy Controller Flow
 
 ```mermaid
 flowchart TD

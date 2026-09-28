@@ -179,7 +179,7 @@ Critical指摘や明確なblocking状態がある場合は `BLOCKED` を優先�
 - `INCONCLUSIVE`: レビュー担当の失敗・欠落・未実行、未解決矛盾、切り捨て、重要なcontext不足、信頼できない品質チェック・シークレットスキャン状態
 
 この `decision` はAIによる統合判定候補です。最終pass/failを単独で決定するものではありません。
-Python ReviewEngineが `rule_based_decision(...)` と `stricter_decision(...)` を使って安全側へ統合します。
+標準Chat経路では `copilotMultiReview/finalize_review` が `rule_based_decision(...)` と `stricter_decision(...)` を使って安全側へ統合します。既存Python ReviewEngineはlegacy互換経路です。
 
 ## 出力契約
 

@@ -30,7 +30,7 @@ The CLI remains available for headless and supplementary workflows. It is not th
 
 ## レビュー結果の出力
 
-Copilot Chatは進捗確認と短い結果確認に使い、正式なレビュー成果物はMarkdownの `report.md` として出力します。
+Copilot Chatは進捗確認と短い結果確認に使い、標準Chat経路の正式なレビュー成果物はMarkdownの `review.md` として `~/.copilot/copilot-multi-review/reviews/<project-id>/review.md` に出力します。レビュー対象Repositoryには書き込みません。
 
 `report.md` では、内部の `Critical / Major / Minor / Info` をそのまま利用者へ見せず、`致命的 / 重大 / 軽微 / 情報` として表示します。観点も内部IDを維持したまま、利用者向けには日本語へ変換します。
 
@@ -45,6 +45,22 @@ Copilot Chatは進捗確認と短い結果確認に使い、正式なレビュ�
 - 報告Reviewer
 
 一覧はMarkdown表で提示し、その後に各指摘の詳細を続けます。根拠付きでコード位置を特定できない事項は行番号を推測せず、Human Checkまたは不足情報として分離します。
+
+## MCP Toolの表示と実行
+
+通常のChatレビューでは、Subagent実行の前後に次のMCP Tool callが見える想定です。
+
+1. `copilotMultiReview/prepare_review`
+2. 専門ReviewerのSubagent tool calls
+3. `Devil Advocate`
+4. `Final Reviewer`
+5. `copilotMultiReview/finalize_review`
+
+`prepare_review` が `blocked` を返した場合、secret保護のため専門Reviewerへdiffを渡さず終了します。
+
+`finalize_review` が返す `decision` が利用者向けの最終判定です。Final Reviewer自身の `decision` はAI統合判定候補であり、そのまま最終表示へ採用しません。
+
+MCP serverはUser portable config `~/.copilot/mcp-config.json` の `copilotMultiReview` として登録します。stdioで起動し、workspaceをcwdとしてPython MCP serverを起動します。
 
 ## Standard Subagent UI
 
@@ -131,21 +147,16 @@ Known constraints:
 - This repository cannot force a user's local VS Code dropdown customization state.
 - Manual UI validation is required for the VS Code Chat surface; pytest covers static agent topology and contracts only.
 
-## Chat-only Versus Controller Execution
+## Chat MCP Versus Legacy Controller Execution
 
-When the Python Review Controller runs a review, it owns deterministic safety processing:
+標準のChat経路ではPython MCP Toolが決定論的処理を担当します。
 
-- diff collection
-- secret scanning before AI receives the diff
-- quality check status
-- `run_id`
-- report/history/latest persistence
-- schema validation
-- deterministic and stricter final decision logic
+- `prepare_review`: diff collection、secret scanning、quality check、Project Context
+- `finalize_review`: Final Reviewer contract validation、deterministic safer decision、`review.md`
 
-When the user starts `Review Orchestrator` directly from Copilot Chat, there may be no controller-created `run_id`. In that case, the Orchestrator must not invent or persist a fake ID. The Chat transcript itself is the observable execution record.
+Chat経路ではlegacy Controllerの `run_id`、lock、cancel、reports/history/latestを作りません。MCP内部では `prepare_review` と `finalize_review` を安全に対応付けるため、プロセス内だけの一時的な `review_context_id` を使用します。これは永続化するrun IDではありません。
 
-If a Controller-originated workflow supplies a `run_id` in the context passed to `Review Orchestrator`, the Orchestrator passes that existing value through to specialists and `Final Reviewer`. This links the Chat execution to report/history data without relying on a Copilot Chat API or UI ID that is not available to this repository.
+既存Python Review Controllerはlegacy互換経路として残り、CLIから実行した場合だけ従来のrun ID / reports / runtimeを使用します。
 
 ## Windows Manual E2E Record
 

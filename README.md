@@ -78,7 +78,7 @@ copilot-multi-review uninstall
 3. `Review Orchestrator` を選択
 4. 「mainとの差分をレビューして」などと依頼する
 
-Custom Agentの正本は `.github/agents` です。セットアップCLIは管理対象Agentだけをユーザー共通領域へ同期し、他のUser Agentは変更しません。
+Custom Agentの正本は `.github/agents` です。セットアップCLIは管理対象Agentだけをユーザー共通領域へ同期し、他のUser Agentは変更しません。あわせてUser MCP config `~/.copilot/mcp-config.json` に `copilotMultiReview` を登録し、既存の他MCP server設定は保持します。
 
 詳細は `docs/custom-agent-installation.md` を参照してください。
 
@@ -155,9 +155,9 @@ VS Code
 -> Review Orchestrator
 ```
 
-`Review Orchestrator`はレビュー専用の入口です。詳細レビューは専門Subagentへ委譲し、Python ReviewEngine / CLIレビュー経路は維持します。一次レビュー後に`Devil Advocate`が各指摘を反証し、その後`Final Reviewer`が総合整理します。設計書・プロジェクト固有ルールを含むレビュー方針は`docs/project-aware-review.md`、責務境界は`docs/architecture.md`を参照してください。
+`Review Orchestrator`はレビュー専用の入口です。標準Chat経路では最初に `copilotMultiReview/prepare_review` を呼び、Pythonが収集・検証したdiff/contextだけを専門Subagentへ渡します。一次レビュー後に`Devil Advocate`が各指摘を反証し、その後`Final Reviewer`が総合整理します。最後に `copilotMultiReview/finalize_review` がAI結果を検証し、Pythonのrule-based decisionと安全側に統合して日本語Markdownを生成します。既存Python ReviewEngine / CLIはlegacy互換経路として残します。
 
-一次レビュー担当は互いの結果を見ずに独立レビューを行います。一次結果を`Devil Advocate`が反証し、`Final Reviewer`が一次結果と反証結果を受け取って重複排除、provenance保持、矛盾整理、AI統合decision候補生成を担当します。最終判定では既存のPython rule-based decisionとの安全側統合を維持します。
+一次レビュー担当は互いの結果を見ずに独立レビューを行います。AIが返した `APPROVE` をそのまま最終判定にはせず、`finalize_review` の `decision` を利用者向け最終判定として扱います。
 
 ## エージェント
 
@@ -189,27 +189,19 @@ Windowsでは`copilot.exe`、`copilot.cmd`、`copilot.bat`、`copilot`の順で�
 
 ## 保存場所
 
-```text
-reports/
-└── <project-id>/
-    ├── latest/
-    │   ├── run.json
-    │   ├── final.json
-    │   ├── report.md
-    │   └── agents/
-    └── history/
-        └── <run-id>/
+標準のCopilot Chat + MCP経路では、正式な詳細レビューをレビュー対象Repositoryの外へ保存します。
 
-runtime/
-└── <project-id>/
-    ├── review.lock
-    ├── mutation.lock
-    ├── cleanup.lock
-    ├── running.json
-    └── cancel.json
+```text
+~/.copilot/
+└── copilot-multi-review/
+    └── reviews/
+        └── <project-id>/
+            └── review.md
 ```
 
-`reports/`と`runtime/`はGit管理対象外です。
+同じRepositoryを再レビューした場合は `review.md` を更新します。対象Repositoryへレビュー成果物は書き込みません。
+
+既存legacy CLI経路の `reports/`、`runtime/`、history/latestは互換性のため残っていますが、通常のChat運用では使用しません。
 
 ## レビュー結果
 
