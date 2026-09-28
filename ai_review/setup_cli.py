@@ -36,7 +36,7 @@ STATUS_LABELS = {
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="copilot-multi-review",
-        description="copilot-multi-review のUser Custom AgentとMCP server設定を管理します。",
+        description="copilot-multi-review のCopilot / Antigravity integrationを管理します。",
     )
     subparsers = parser.add_subparsers(dest="command")
 
