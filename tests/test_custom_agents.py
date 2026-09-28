@@ -124,10 +124,10 @@ def test_orchestrator_delegates_to_all_specialist_reviewers() -> None:
     for reviewer_name in SPECIALIST_REVIEWERS.values():
         assert reviewer_name in orchestrator.instructions
     assert "Final Reviewer Input Contract" in orchestrator.instructions
-    assert "Keep specialist reviewers independent" in orchestrator.instructions
-    assert "using the `agent` tool" in orchestrator.instructions
-    assert "Copilot Chat's standard `agent` tool call UI" in orchestrator.instructions
-    assert "Do not create a custom progress UI" in orchestrator.instructions
+    assert "一次レビュー担当の独立性を保つ" in orchestrator.instructions
+    assert "`agent` toolを使い" in orchestrator.instructions
+    assert "Copilot Chat標準のSubagent表示" in orchestrator.instructions
+    assert "独自の進捗UI" in orchestrator.instructions
 
 
 def test_orchestrator_agent_names_match_defined_leaf_agents_exactly() -> None:
@@ -172,10 +172,19 @@ def test_specialist_reviewers_document_independent_evaluation() -> None:
     for file_name in SPECIALIST_REVIEWERS:
         if file_name == "devil-advocate.agent.md":
             continue
-        instructions = by_file[file_name].instructions.lower()
-        assert "do not use other reviewer results before review" in instructions
-        assert "previous reviewer conclusions" in instructions
-        assert "independently evaluate the same diff/context" in instructions
+        instructions = by_file[file_name].instructions
+        english = instructions.lower()
+        has_english_contract = (
+            "do not use other reviewer results before review" in english
+            and "previous reviewer conclusions" in english
+            and "independently evaluate the same diff/context" in english
+        )
+        has_japanese_contract = (
+            "他のレビュー担当の結果を参照しない" in instructions
+            and "以前のレビュー担当の結論を利用しない" in instructions
+            and "独立して評価" in instructions
+        )
+        assert has_english_contract or has_japanese_contract
 
     devil = by_file["devil-advocate.agent.md"].instructions
     assert "primary_reviewer_results" in devil
