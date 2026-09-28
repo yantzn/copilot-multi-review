@@ -4,12 +4,12 @@
 
 copilot-multi-reviewは、User Custom AgentとPython MCP Toolを組み合わせた、レビュー対象リポジトリから分離されたコードレビュー基盤です。
 
-標準の利用者入口はVS Code GitHub Copilot Chatの `Review Orchestrator` です。Custom Agent群は `~/.copilot/agents`、MCP serverは `~/.copilot/mcp-config.json` へUser単位で登録します。レビュー対象Repositoryにはcopilot-multi-review固有ファイルを追加しません。
+標準の利用者入口は、VS Code GitHub Copilot Chatの `Review Orchestrator` またはGoogle Antigravityの `review-orchestrator` です。CopilotはUser Custom Agent、AntigravityはGlobal Pluginとして配布し、両方が同じPython MCP `prepare_review` / `finalize_review` を利用します。レビュー対象Repositoryにはcopilot-multi-review固有ファイルを追加しません。
 
 標準Chat経路の責務は次のように分離します。
 
 - Python MCP `prepare_review`: 事実収集、安全前処理、Project Context収集
-- Copilot Custom Agents: 意味判断、専門レビュー、反証、統合
+- Copilot Custom Agents / Antigravity Custom Agents: 意味判断、専門レビュー、反証、統合
 - Python MCP `finalize_review`: contract検証、決定論的安全側判定、日本語Markdown生成
 - Human: 指摘採否、修正方針、PR承認などの最終判断
 
@@ -33,6 +33,26 @@ flowchart TD
   L --> M["Japanese review.md outside target repository"]
   M --> N["Chat summary + human final decision"]
 ```
+
+## Antigravity Flow
+
+```mermaid
+flowchart TD
+  A["Target repository in Antigravity IDE"] --> B["review-orchestrator"]
+  B --> C["MCP prepare_review"]
+  C --> D{"confirmed secret?"}
+  D -->|yes| E["BLOCKED / diff is not sent to AI"]
+  D -->|no| F["Independent custom subagents"]
+  F --> G["Devil Advocate"]
+  G --> H["Final Reviewer"]
+  H --> I["MCP finalize_review"]
+  I --> J["Japanese review.md outside target repository"]
+  J --> K["Antigravity summary + human final decision"]
+```
+
+Antigravity integrationはGlobal Plugin `~/.gemini/config/plugins/copilot-multi-review/` にCustom Agent / Subagent / `review` Skillを配置し、Global MCP `~/.gemini/config/mcp_config.json` へ `copilotMultiReview` を登録します。
+
+一次Reviewerは `mainAgent: false` / `subagent: true` で定義し、Orchestratorだけが `invoke_subagent` とMCP継承を持ちます。AntigravityのSubagentは親Conversationの既存historyを継承しない独立contextで起動されるため、一次Reviewer間の独立性を実行モデルとして保ちます。
 
 ## Legacy Controller Flow
 
