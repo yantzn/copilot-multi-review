@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "copilot-multi-review"
 version = "0.1.0"
-description = "Local multi-agent code review runner for GitHub Copilot CLI."
+description = "Custom Agent based multi-review toolkit for VS Code GitHub Copilot Chat."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
