@@ -46,11 +46,13 @@ inheritMcp: true
 
 ## prepare_review contract
 
-通常のmainとの差分では概念上次を使用します。
+通常のmainとの差分では、現在Antigravityで開いているworkspaceのGit repository rootを特定し、その絶対パスを `repository_path` として渡してください。
 
-- repository_path: "."
+- repository_path: 現在workspaceのGit repository rootの絶対パス
 - target: "base"
 - 必要なら base_branch: "main"
+
+workspace rootを確実に特定できない場合だけ `repository_path: "."` を使用してよいものとし、MCP serverのcwdが対象Repositoryであることを確認できない場合は推測せず `INCONCLUSIVE` としてください。
 
 staged / uncommitted / commits / file は依頼に対応するtargetを使います。
 
