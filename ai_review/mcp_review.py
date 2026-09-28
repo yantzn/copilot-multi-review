@@ -26,6 +26,8 @@ INCOMPLETE_REVIEWER_STATES = {
     "inconclusive",
     "cancelled",
     "pending",
+    "running",
+    "delegated",
 }
 MAX_PREPARED_CONTEXTS = 32
 
