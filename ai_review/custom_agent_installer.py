@@ -117,7 +117,7 @@ def sync_agents() -> dict[str, object]:
 
         if target.exists():
             target_hash = _sha256(target)
-            if target_name not in managed_before and not manifest:
+            if target_name not in managed_before:
                 raise CustomAgentInstallError(
                     f"管理対象外の既存Custom Agentと衝突しています: {target}"
                 )
