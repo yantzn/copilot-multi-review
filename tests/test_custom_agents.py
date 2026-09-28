@@ -172,14 +172,33 @@ def test_user_facing_agent_output_language_is_japanese() -> None:
     by_name = {definition.name: definition for definition in definitions}
 
     for name in [
+        "Requirements Reviewer",
+        "Correctness Reviewer",
         "Design Conformance Reviewer",
         "Project Rules Reviewer",
+        "Security Reviewer",
+        "Testing Reviewer",
+        "Maintainability Reviewer",
+        "Performance Reviewer",
+        "Operations Reviewer",
         "Devil Advocate",
         "Final Reviewer",
         "Review Orchestrator",
     ]:
-        assert "利用者向け" in by_name[name].instructions
         assert "日本語" in by_name[name].instructions
+
+
+def test_user_level_specialists_are_not_hard_coded_to_this_repository() -> None:
+    definitions = validate_custom_agents(Path.cwd())
+    by_file = {definition.path.name: definition for definition in definitions}
+
+    for file_name in SPECIALIST_REVIEWERS:
+        if file_name == "devil-advocate.agent.md":
+            continue
+        instructions = by_file[file_name].instructions
+        assert "for `copilot-multi-review`" not in instructions
+        assert "For this repository" not in instructions
+        assert "レビュー対象リポジトリ" in instructions
 
 
 def test_specialist_reviewers_document_independent_evaluation() -> None:
