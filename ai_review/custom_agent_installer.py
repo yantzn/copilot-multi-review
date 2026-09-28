@@ -241,10 +241,6 @@ def manifest_snapshot() -> dict[str, object]:
     return _load_manifest()
 
 
-def _contains_all_agents(path: Path) -> bool:
-    return path.is_dir() and all((path / name).is_file() for name in AGENT_FILENAMES)
-
-
 def _validate_source_dir(path: Path) -> None:
     if not path.is_dir():
         raise CustomAgentInstallError(f"Custom Agentのソースディレクトリがありません: {path}")
