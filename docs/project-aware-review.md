@@ -28,7 +28,7 @@ Devil Advocate（反証レビュー）
   ↓
 Final Reviewer（総合整理）
   ↓
-Python deterministic decision
+Pythonによる決定論的な安全側判定
   ↓
 人間の最終判断
 ```
