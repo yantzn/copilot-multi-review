@@ -59,4 +59,4 @@ def test_collect_project_context_reports_unsupported_binary_design_formats(tmp_p
     warnings = "\n".join(context["warnings"])
     assert "legacy.xls" in warnings
     assert "screen.pdf" in warnings
-    assert "structured parsing is not supported" in warnings
+    assert "構造化解析には対応していません" in warnings
