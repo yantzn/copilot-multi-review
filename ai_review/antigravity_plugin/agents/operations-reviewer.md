@@ -7,7 +7,7 @@ tools:
 mainAgent: false
 subagent: true
 model: inherit
-commandExecutionPolicy: off
+commandExecutionPolicy: "off"
 inheritMcp: false
 ---
 
