@@ -77,7 +77,7 @@ MCPはAntigravityのglobal configへ登録します。
 ~/.gemini/config/mcp_config.json
 ```
 
-server idは `copilotMultiReview` です。stdioで既存 `ai_review.mcp_server` を起動し、cwdは現在のworkspaceとします。
+server idは `copilotMultiReview` です。stdioで既存 `ai_review.mcp_server` を起動します。MCP設定には `cwd: "${workspaceFolder}"` を設定しますが、レビュー対象の正しさをこの展開だけに依存させず、Orchestratorは現在のGit repository rootの絶対パスを `prepare_review.repository_path` へ渡します。`${workspaceFolder}` のruntime展開はAntigravity IDE E2Eで確認します。
 
 ## 初回セットアップ
 
