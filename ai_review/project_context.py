@@ -63,7 +63,7 @@ def collect_project_context(root: Path) -> dict[str, object]:
                 design_items.append(item)
         elif suffix in {".xls", ".pdf"}:
             warnings.append(
-                f"{_relative(root, path)}: structured parsing is not supported; provide OCR/text or convert to .xlsx"
+                f"{_relative(root, path)}: 構造化解析には対応していません。OCR/テキストを提供するか、.xlsxへ変換してください。"
             )
 
     return {
@@ -159,7 +159,7 @@ def _parse_xlsx(root: Path, path: Path) -> tuple[list[dict[str, object]], list[s
                     consumed += 1
                     if consumed >= MAX_XLSX_CELLS:
                         warnings.append(
-                            f"{_relative(root, path)}: Excel extraction reached {MAX_XLSX_CELLS} non-empty cells"
+                            f"{_relative(root, path)}: Excelの抽出件数が上限（{MAX_XLSX_CELLS}件の非空セル）に達しました。"
                         )
                         break
                 if consumed >= MAX_XLSX_CELLS:
