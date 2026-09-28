@@ -22,10 +22,14 @@ dev = [
 
 [project.scripts]
 ai-review = "ai_review.cli:main"
+copilot-multi-review = "ai_review.setup_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["ai_review*"]
+
+[tool.setuptools.package-data]
+ai_review = ["agent_templates/*.agent.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
