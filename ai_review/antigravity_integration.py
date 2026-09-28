@@ -58,6 +58,11 @@ def desired_mcp_server_config() -> dict[str, object]:
         "command": sys.executable,
         "args": ["-m", "ai_review.mcp_server"],
         "cwd": "${workspaceFolder}",
+        "env": {
+            "COPILOT_MULTI_REVIEW_OUTPUT_HOME": str(
+                antigravity_config_home() / "copilot-multi-review"
+            )
+        },
     }
 
 
