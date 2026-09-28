@@ -160,9 +160,26 @@ def test_specialist_reviewers_include_common_finding_contract() -> None:
     ]
 
     for file_name in SPECIALIST_REVIEWERS:
+        if file_name == "devil-advocate.agent.md":
+            continue
         instructions = by_file[file_name].instructions
         for term in required_terms:
             assert term in instructions
+
+
+def test_user_facing_agent_output_language_is_japanese() -> None:
+    definitions = validate_custom_agents(Path.cwd())
+    by_name = {definition.name: definition for definition in definitions}
+
+    for name in [
+        "Design Conformance Reviewer",
+        "Project Rules Reviewer",
+        "Devil Advocate",
+        "Final Reviewer",
+        "Review Orchestrator",
+    ]:
+        assert "利用者向け" in by_name[name].instructions
+        assert "日本語" in by_name[name].instructions
 
 
 def test_specialist_reviewers_document_independent_evaluation() -> None:
