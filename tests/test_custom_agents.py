@@ -124,10 +124,10 @@ def test_orchestrator_delegates_to_all_specialist_reviewers() -> None:
     for reviewer_name in SPECIALIST_REVIEWERS.values():
         assert reviewer_name in orchestrator.instructions
     assert "Final Reviewer Input Contract" in orchestrator.instructions
-    assert "Keep specialist reviewers independent" in orchestrator.instructions
-    assert "using the `agent` tool" in orchestrator.instructions
-    assert "Copilot Chat's standard `agent` tool call UI" in orchestrator.instructions
-    assert "Do not create a custom progress UI" in orchestrator.instructions
+    assert "一次レビュー担当の独立性を保つ" in orchestrator.instructions
+    assert "`agent` toolを使い" in orchestrator.instructions
+    assert "Copilot Chat標準のSubagent表示" in orchestrator.instructions
+    assert "独自の進捗UI" in orchestrator.instructions
 
 
 def test_orchestrator_agent_names_match_defined_leaf_agents_exactly() -> None:
@@ -160,9 +160,26 @@ def test_specialist_reviewers_include_common_finding_contract() -> None:
     ]
 
     for file_name in SPECIALIST_REVIEWERS:
+        if file_name == "devil-advocate.agent.md":
+            continue
         instructions = by_file[file_name].instructions
         for term in required_terms:
             assert term in instructions
+
+
+def test_user_facing_agent_output_language_is_japanese() -> None:
+    definitions = validate_custom_agents(Path.cwd())
+    by_name = {definition.name: definition for definition in definitions}
+
+    for name in [
+        "Design Conformance Reviewer",
+        "Project Rules Reviewer",
+        "Devil Advocate",
+        "Final Reviewer",
+        "Review Orchestrator",
+    ]:
+        assert "利用者向け" in by_name[name].instructions
+        assert "日本語" in by_name[name].instructions
 
 
 def test_specialist_reviewers_document_independent_evaluation() -> None:
@@ -170,10 +187,26 @@ def test_specialist_reviewers_document_independent_evaluation() -> None:
     by_file = {definition.path.name: definition for definition in definitions}
 
     for file_name in SPECIALIST_REVIEWERS:
-        instructions = by_file[file_name].instructions.lower()
-        assert "do not use other reviewer results before review" in instructions
-        assert "previous reviewer conclusions" in instructions
-        assert "independently evaluate the same diff/context" in instructions
+        if file_name == "devil-advocate.agent.md":
+            continue
+        instructions = by_file[file_name].instructions
+        english = instructions.lower()
+        has_english_contract = (
+            "do not use other reviewer results before review" in english
+            and "previous reviewer conclusions" in english
+            and "independently evaluate the same diff/context" in english
+        )
+        has_japanese_contract = (
+            "他のレビュー担当の結果を参照しない" in instructions
+            and "以前のレビュー担当の結論を利用しない" in instructions
+            and "独立して評価" in instructions
+        )
+        assert has_english_contract or has_japanese_contract
+
+    devil = by_file["devil-advocate.agent.md"].instructions
+    assert "primary_reviewer_results" in devil
+    assert "維持候補" in devil
+    assert "根拠不足による棄却候補" in devil
 
 
 def test_final_reviewer_documents_input_contract() -> None:
@@ -231,11 +264,11 @@ def test_final_reviewer_documents_dedup_and_provenance_contract() -> None:
     final = next(item for item in definitions if item.name == "Final Reviewer")
     instructions = final.instructions.lower()
 
-    assert "merge duplicate findings" in instructions
-    assert "semantic similarity" in instructions
+    assert "重複指摘を統合" in final.instructions
+    assert "意味的な類似" in final.instructions
     assert "reported_by" in final.instructions
     assert "reported_severities" in final.instructions
-    assert "Critical and Major" in final.instructions
+    assert "Critical / Major" in final.instructions
 
 
 def test_final_reviewer_documents_severity_conflict_resolution() -> None:
@@ -244,7 +277,7 @@ def test_final_reviewer_documents_severity_conflict_resolution() -> None:
 
     assert "Critical > Major > Minor > Info" in final.instructions
     assert "severity_conflict: true" in final.instructions
-    assert "choose the highest severity" in final.instructions
+    assert "最も安全側の重大度" in final.instructions
 
 
 def test_final_reviewer_documents_conflicts_and_incomplete_review() -> None:
@@ -252,13 +285,13 @@ def test_final_reviewer_documents_conflicts_and_incomplete_review() -> None:
     final = next(item for item in definitions if item.name == "Final Reviewer")
     instructions = final.instructions.lower()
 
-    assert "do not hide clear contradictions" in instructions
+    assert "隠さず `conflicts` に残してください" in final.instructions
     assert "conflicts" in instructions
     assert "failed" in instructions
     assert "missing" in instructions
     assert "not_run" in instructions
     assert "incomplete_review" in instructions
-    assert "do not propose unconditional `approve`" in instructions
+    assert "無条件の `APPROVE` を提案してはいけません" in final.instructions
     assert "truncated" in instructions
     assert "INCONCLUSIVE" in final.instructions
 
@@ -269,7 +302,7 @@ def test_final_reviewer_uses_existing_decision_vocabulary() -> None:
 
     for decision in ["APPROVE", "APPROVE_WITH_NOTES", "CHANGES_REQUIRED", "BLOCKED", "INCONCLUSIVE"]:
         assert decision in final.instructions
-    assert "AI synthesis decision candidate" in final.instructions
+    assert "AIによる統合判定候補" in final.instructions
     assert "stricter_decision" in final.instructions
 
 
@@ -398,7 +431,7 @@ def test_architecture_documents_python_and_custom_agent_boundaries() -> None:
     assert "Review Orchestrator" in text
     assert "VS Code Copilot Chat" in text
     assert "Python Review Controller" in text
-    assert "AI output is untrusted input" in text
+    assert "AI出力は信頼済み入力として扱いません" in text
     assert "Copilot CLI" in text
     for reviewer in [
         "requirements",
@@ -526,6 +559,8 @@ tools: ['agent']
 agents:
   - Requirements Reviewer
   - Correctness Reviewer
+  - Design Conformance Reviewer
+  - Project Rules Reviewer
   - Security Reviewer
   - Testing Reviewer
   - Maintainability Reviewer
@@ -566,6 +601,8 @@ tools: ['agent']
 agents:
   - Requirements Reviewer
   - Correctness Reviewer
+  - Design Conformance Reviewer
+  - Project Rules Reviewer
   - Security Reviewer
   - Testing Reviewer
   - Maintainability Reviewer

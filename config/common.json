@@ -4,6 +4,8 @@
   "agents": [
     "requirements",
     "correctness",
+    "design_conformance",
+    "project_rules",
     "security",
     "testing",
     "maintainability",

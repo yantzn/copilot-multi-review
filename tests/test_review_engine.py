@@ -120,7 +120,7 @@ class PayloadKind(Enum):
     PRIMARY = "primary"
 
 
-def test_standard_path_invokes_orchestrator_once_not_nine_agents(tmp_path: Path) -> None:
+def test_standard_path_invokes_orchestrator_once_not_all_reviewers(tmp_path: Path) -> None:
     repo = init_repo(tmp_path / "repo")
     client = FakeClient()
 
@@ -132,7 +132,7 @@ def test_standard_path_invokes_orchestrator_once_not_nine_agents(tmp_path: Path)
     assert all(state == "completed" for state in result.agent_states.values())
 
 
-def test_legacy_runs_nine_agents_serially(tmp_path: Path) -> None:
+def test_legacy_runs_eleven_agents_serially(tmp_path: Path) -> None:
     repo = init_repo(tmp_path / "repo")
     client = FakeClient()
     request = request_for(repo)
@@ -150,6 +150,8 @@ def test_legacy_runs_nine_agents_serially(tmp_path: Path) -> None:
     assert client.calls == [
         "requirements",
         "correctness",
+        "design_conformance",
+        "project_rules",
         "security",
         "testing",
         "maintainability",
@@ -753,3 +755,51 @@ def test_subagent_final_adapter_rejects_unknown_top_level_field() -> None:
 )
 def test_stricter_decision_keeps_safer_outcome(ai_decision: str, rule_decision: str, expected: str) -> None:
     assert stricter_decision(rule_decision, ai_decision) == expected
+
+
+def test_orchestrator_payload_includes_project_aware_context(tmp_path: Path) -> None:
+    requirements = tmp_path / "requirements"
+    requirements.mkdir()
+    (requirements / "requirements.md").write_text("REQ-001: duplicate returns 409\n", encoding="utf-8")
+
+    rules = tmp_path / "project-rules"
+    rules.mkdir()
+    (rules / "rules.md").write_text("PRJ-ARCH-001: API must not call Repository directly\n", encoding="utf-8")
+
+    request = static_request(tmp_path, changed_files=[])
+    payload = _build_orchestrator_payload(request)
+
+    assert payload["requirements_context"][0]["source_file"] == "requirements/requirements.md"
+    assert payload["project_rules"][0]["source_file"] == "project-rules/rules.md"
+    assert "design_context" in payload
+    assert "project_context_warnings" in payload
+
+
+def test_parse_agent_response_accepts_benchmark_trace_fields() -> None:
+    raw = json.dumps(
+        {
+            "run_id": "run-1",
+            "agent": "final",
+            "provider": "github-copilot-cli",
+            "schema_version": "0.1.0",
+            "decision": "INCONCLUSIVE",
+            "findings": [],
+            "summary": "human check needed",
+            "reviewer_states": {agent: "completed" for agent in AGENT_ORDER[:-1]},
+            "human_checks": [{"message": "requirements and design conflict"}],
+            "challenge_decisions": [{"finding": "REQ-1", "decision": "人間確認へ移動"}],
+            "excluded_findings": [{"message": "unsupported claim", "reason": "根拠不足"}],
+            "review_coverage": {
+                "reviewed": ["requirements", "design"],
+                "not_reviewed": [],
+                "missing_context": [],
+            },
+        }
+    )
+
+    result = parse_subagent_final_response(raw, run_id="run-1")
+
+    assert result.human_checks == [{"message": "requirements and design conflict"}]
+    assert result.challenge_decisions[0]["decision"] == "人間確認へ移動"
+    assert result.excluded_findings[0]["reason"] == "根拠不足"
+    assert result.review_coverage["reviewed"] == ["requirements", "design"]

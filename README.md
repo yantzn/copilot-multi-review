@@ -96,10 +96,10 @@ headless環境ではCLIを使います。
 python -m ai_review review --repo <path> --target base
 ```
 
-Default review execution mode is `subagent`: Python prepares safe context and
-invokes the Copilot Review Orchestrator once. The previous Python-driven
-9-agent serial runner is deprecated and available only with
-`--execution-mode legacy`; `--agent` is legacy-only.
+標準のレビュー実行モードは `subagent` です。Pythonが安全なcontextを準備し、
+Copilot Review Orchestratorを1回呼び出します。従来のPython主導による
+11 Agent直列実行は非推奨で、`--execution-mode legacy` の場合だけ利用できます。
+`--agent` もlegacy実行専用です。
 
 ### Copilot Chat Custom Agent
 
@@ -112,23 +112,25 @@ VS Code
 -> Review Orchestrator
 ```
 
-`Review Orchestrator`はレビュー専用の入口です。詳細レビューは専門Subagentへ委譲し、Python ReviewEngine / CLIレビュー経路は維持します。詳しい責務境界は`docs/architecture.md`を参照してください。
+`Review Orchestrator`はレビュー専用の入口です。詳細レビューは専門Subagentへ委譲し、Python ReviewEngine / CLIレビュー経路は維持します。一次レビュー後に`Devil Advocate`が各指摘を反証し、その後`Final Reviewer`が総合整理します。設計書・プロジェクト固有ルールを含むレビュー方針は`docs/project-aware-review.md`、責務境界は`docs/architecture.md`を参照してください。
 
-専門Reviewerは互いの結果を見ずに独立レビューを行い、`Final Reviewer`だけが全専門結果を受け取って重複排除、provenance保持、矛盾整理、AI統合decision候補生成を担当します。最終判定では既存のPython rule-based decisionとの安全側統合を維持します。
+一次レビュー担当は互いの結果を見ずに独立レビューを行います。一次結果を`Devil Advocate`が反証し、`Final Reviewer`が一次結果と反証結果を受け取って重複排除、provenance保持、矛盾整理、AI統合decision候補生成を担当します。最終判定では既存のPython rule-based decisionとの安全側統合を維持します。
 
 ## エージェント
 
-1つのGitHub Copilot CLIを、次の9種類の論理エージェントとして完全に直列実行します。最大同時Copilot呼び出し数は1です。
+legacy実行では、1つのGitHub Copilot CLIを次の11種類の論理エージェントとして実行します。標準経路はCustom Agent/Subagentです。
 
 1. requirements
 2. correctness
-3. security
-4. testing
-5. maintainability
-6. performance
-7. operations
-8. devil_advocate
-9. final
+3. design_conformance
+4. project_rules
+5. security
+6. testing
+7. maintainability
+8. performance
+9. operations
+10. devil_advocate
+11. final
 
 ## 安全制約
 
@@ -240,3 +242,29 @@ Evaluation records:
 AI credits: current GitHub Copilot interfaces do not expose per-subagent/per-reviewer credit usage for this architecture. Do not estimate credits from token count, prompt length, duration, or fixed coefficients.
 
 Issue #6 status: legacy and superseded by #23-#29 for the standard path. It was the original closed Python nine-reviewer sequential MVP and must not be restored as the standard.
+
+
+## プロジェクト適合型レビュー
+
+標準Custom Agent経路では、コードだけでなく、明示された要件・設計情報・プロジェクト固有ルールもレビュー根拠として扱えます。
+
+追加した一次レビュー担当:
+
+- `Design Conformance Reviewer`: 設計書と実装の整合性
+- `Project Rules Reviewer`: プロジェクト固有ルールとの適合性
+
+一次レビュー完了後、`Devil Advocate`が誤検出・過剰断定・根拠不足を反証し、その後`Final Reviewer`が総合整理します。利用者向けの成果物名・判定指標は可能な限り日本語で表記します。
+
+詳細: `docs/project-aware-review.md`
+
+
+### 実行時プロジェクト文脈
+
+標準Review Controllerは、対象リポジトリから次を読み取り専用で収集してOrchestratorへ渡します。
+
+- 要件文書
+- Excel（.xlsx）を含む設計情報
+- プロジェクト固有ルール
+- 抽出時の警告・制限
+
+Excelはopenpyxlで構造化し、ファイル名・シート名・セル座標をprovenanceとして保持します。.xls / PDFは自動で内容を補完せず、未対応形式として警告します。

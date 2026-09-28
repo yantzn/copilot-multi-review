@@ -6,6 +6,8 @@ from dataclasses import dataclass
 AGENT_ORDER = [
     "requirements",
     "correctness",
+    "design_conformance",
+    "project_rules",
     "security",
     "testing",
     "maintainability",
@@ -63,6 +65,10 @@ class AgentResult:
     reviewer_states: dict[str, str] | None = None
     conflicts: list[dict[str, object]] | None = None
     incomplete_review: bool | None = None
+    human_checks: list[dict[str, object]] | None = None
+    challenge_decisions: list[dict[str, object]] | None = None
+    excluded_findings: list[dict[str, object]] | None = None
+    review_coverage: dict[str, object] | None = None
 
 
 def rule_based_decision(results: list[AgentResult], *, truncated: bool = False, failed: bool = False) -> str:

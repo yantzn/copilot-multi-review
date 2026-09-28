@@ -32,6 +32,8 @@ BANNED_REVIEW_TOOLS = {
 SPECIALIST_REVIEWERS = {
     "requirements-reviewer.agent.md": "Requirements Reviewer",
     "correctness-reviewer.agent.md": "Correctness Reviewer",
+    "design-conformance-reviewer.agent.md": "Design Conformance Reviewer",
+    "project-rules-reviewer.agent.md": "Project Rules Reviewer",
     "security-reviewer.agent.md": "Security Reviewer",
     "testing-reviewer.agent.md": "Testing Reviewer",
     "maintainability-reviewer.agent.md": "Maintainability Reviewer",
