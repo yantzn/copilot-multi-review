@@ -66,6 +66,7 @@ def test_antigravity_plugin_has_expected_agents_and_review_skill() -> None:
     assert orchestrator["mainAgent"] is True
     assert orchestrator["subagent"] is True
     assert orchestrator["inheritMcp"] is True
+    assert orchestrator["commandExecutionPolicy"] == "off"
     assert "invoke_subagent" in orchestrator["tools"]
 
     for name in AGENTS - {"review-orchestrator"}:
@@ -73,6 +74,7 @@ def test_antigravity_plugin_has_expected_agents_and_review_skill() -> None:
         assert metadata["mainAgent"] is False
         assert metadata["subagent"] is True
         assert metadata["inheritMcp"] is False
+        assert metadata["commandExecutionPolicy"] == "off"
         tools = set(metadata.get("tools", []))
         assert "replace_file_content" not in tools
         assert "run_command" not in tools
