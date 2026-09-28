@@ -1,6 +1,6 @@
 # copilot-multi-review
 
-GitHub Copilot CLI専用のローカル・マルチエージェントコードレビュー基盤です。
+VS Code GitHub Copilot ChatのCustom Agentを中心に、複数の専門Reviewerでコードレビューを行う基盤です。既存のPython Review Controller / CLIは移行期間中の互換経路として残しています。
 
 レビューエンジン、プロンプト、Schema、runtime、レポートはこの専用リポジトリへ集約します。レビュー対象の外部Gitリポジトリには、レビュー用コード、設定、レポート、runtimeを作成しません。
 
@@ -24,7 +24,9 @@ python -m pip install -U pip
 python -m pip install -e .[dev]
 ```
 
-GitHub Copilot CLIを導入し、認証してください。
+通常のCustom Agent運用では、VS CodeでGitHub Copilot Chat / Agent機能を利用できる状態にしてください。
+
+既存のlegacy CLI経路を使用する場合のみ、GitHub Copilot CLIの導入・認証と `ai-review validate-config` が必要です。
 
 ```bash
 copilot version
@@ -38,6 +40,47 @@ WindowsではUTF-8環境を推奨します。
 $env:PYTHONUTF8 = "1"
 $env:PYTHONIOENCODING = "utf-8"
 ```
+
+## User Custom Agentセットアップ
+
+通常の対話レビューでは、`copilot-multi-review` リポジトリを開く必要はありません。Custom Agent群をユーザー共通の `~/.copilot/agents` へインストールし、レビュー対象リポジトリをVS Codeで開いたままCopilot Chatから利用します。
+
+初回:
+
+```bash
+python -m pip install -e .
+copilot-multi-review install
+```
+
+更新:
+
+```bash
+git pull
+copilot-multi-review sync
+```
+
+状態確認:
+
+```bash
+copilot-multi-review status
+```
+
+削除:
+
+```bash
+copilot-multi-review uninstall
+```
+
+通常利用:
+
+1. レビュー対象リポジトリをVS Codeで開く
+2. Copilot Chatを開く
+3. `Review Orchestrator` を選択
+4. 「mainとの差分をレビューして」などと依頼する
+
+Custom Agentの正本は `.github/agents` です。セットアップCLIは管理対象Agentだけをユーザー共通領域へ同期し、他のUser Agentは変更しません。
+
+詳細は `docs/custom-agent-installation.md` を参照してください。
 
 ## CLI
 

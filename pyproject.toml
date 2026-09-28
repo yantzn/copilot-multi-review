@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "copilot-multi-review"
 version = "0.1.0"
-description = "Local multi-agent code review runner for GitHub Copilot CLI."
+description = "Custom Agent based multi-review toolkit for VS Code GitHub Copilot Chat."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -22,10 +22,14 @@ dev = [
 
 [project.scripts]
 ai-review = "ai_review.cli:main"
+copilot-multi-review = "ai_review.setup_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["ai_review*"]
+
+[tool.setuptools.package-data]
+ai_review = ["agent_templates/*.agent.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
